@@ -1,12 +1,6 @@
+
 import { Pet } from "../types";
 import { ChatMessage } from "../hooks/useChatHistory";
-
-/**
- * Cliente HTTP do serviço de IA da Clyvo.
- *
- * A URL vem de `EXPO_PUBLIC_AI_API_URL` (arquivo .env na raiz do projeto).
- * Nenhuma chave de LLM trafega pelo app: o segredo vive apenas no backend.
- */
 
 export type Urgency = "baixa" | "media" | "alta" | "emergencia";
 
@@ -44,36 +38,69 @@ export type PetRisk = {
 };
 
 const BASE_URL =
-  process.env.EXPO_PUBLIC_AI_API_URL?.replace(/\/$/, "") ??
-  "http://localhost:8000";
+  "https://projeto-challenge-conversacional.onrender.com";
 
 const TIMEOUT_MS = 45000;
 
-async function request<T>(path: string, body: unknown): Promise<T> {
+async function request<T>(
+  path: string,
+  body: unknown,
+): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, TIMEOUT_MS);
+
+  const url = `${BASE_URL}${path}`;
+
+  console.log("CLYVO API REQUEST:", url);
+  console.log("CLYVO API BODY:", JSON.stringify(body));
 
   try {
-    const response = await fetch(`${BASE_URL}${path}`, {
+    const response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
 
+    console.log("CLYVO API STATUS:", response.status);
+
+    const responseText = await response.text();
+
+    console.log("CLYVO API RESPONSE:", responseText);
+
     if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`Serviço de IA respondeu ${response.status}: ${detail}`);
+      throw new Error(
+        `Serviço de IA respondeu ${response.status}: ${responseText}`,
+      );
     }
 
-    return (await response.json()) as T;
+    return JSON.parse(responseText) as T;
+  } catch (error) {
+    console.error("CLYVO API ERROR:", error);
+
+    if (error instanceof Error) {
+      if (error.name === "AbortError") {
+        throw new Error(
+          "A requisição para o serviço de IA expirou após 45 segundos.",
+        );
+      }
+
+      throw error;
+    }
+
+    throw new Error("Erro desconhecido ao chamar o serviço de IA.");
   } finally {
     clearTimeout(timeout);
   }
 }
 
 class AiService {
-  /** Envia a mensagem do tutor com o prontuário do pet como contexto. */
   async chat(params: {
     pet: Pet | null;
     message: string;
@@ -86,12 +113,10 @@ class AiService {
     });
   }
 
-  /** Score de risco e alertas de um pet (motor de regras, sem LLM). */
   async evaluate(pet: Pet): Promise<PetRisk> {
     return request<PetRisk>("/api/alerts", pet);
   }
 
-  /** Avaliação em lote, ordenada por risco. */
   async evaluateAll(pets: Pet[]): Promise<PetRisk[]> {
     return request<PetRisk[]>("/api/alerts/batch", pets);
   }
