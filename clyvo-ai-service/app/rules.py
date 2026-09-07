@@ -11,7 +11,10 @@ from datetime import date, datetime
 from .schemas import Alert, AlertSeverity, AlertsResponse, Pet
 
 
-# Pesos de risco por código de alerta (somados e limitados a 100)
+# ---------------------------------------------------------------------------
+# Pesos de risco por código de alerta
+# ---------------------------------------------------------------------------
+
 RISK_WEIGHTS: dict[str, int] = {
     "VACINA_VENCIDA": 30,
     "VACINA_A_VENCER": 12,
@@ -27,6 +30,10 @@ RISK_WEIGHTS: dict[str, int] = {
 DIAS_ALERTA_ANTECIPADO = 30
 
 
+# ---------------------------------------------------------------------------
+# Utilitários
+# ---------------------------------------------------------------------------
+
 def _parse(value: str | None) -> date | None:
     """Aceita ISO, formato BR e ISO com horário."""
     if not value:
@@ -34,14 +41,16 @@ def _parse(value: str | None) -> date | None:
 
     raw = str(value).strip()
 
-    for fmt in (
+    formatos = (
         "%Y-%m-%d",
         "%d/%m/%Y",
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%dT%H:%M:%S.%fZ",
-    ):
+    )
+
+    for fmt in formatos:
         try:
-            return datetime.strptime(raw[: len(fmt) + 6], fmt).date()
+            return datetime.strptime(raw, fmt).date()
         except ValueError:
             continue
 
@@ -53,7 +62,9 @@ def _parse(value: str | None) -> date | None:
         return None
 
 
-def _parse_age_years(age: int | float | str | None) -> float | None:
+def _parse_age_years(
+    age: int | float | str | None,
+) -> float | None:
     """
     Extrai a idade em anos.
 
@@ -68,7 +79,6 @@ def _parse_age_years(age: int | float | str | None) -> float | None:
     if age is None:
         return None
 
-    # Caso o aplicativo envie diretamente um número.
     if isinstance(age, (int, float)):
         return float(age)
 
@@ -77,19 +87,19 @@ def _parse_age_years(age: int | float | str | None) -> float | None:
     if not raw_age:
         return None
 
-    digits = (
-        "".join(
-            c if c.isdigit() or c == "." else " "
-            for c in raw_age
-        )
-        .split()
-    )
+    # Normaliza vírgula decimal.
+    raw_age = raw_age.replace(",", ".")
 
-    if not digits:
+    partes = "".join(
+        c if c.isdigit() or c == "." else " "
+        for c in raw_age
+    ).split()
+
+    if not partes:
         return None
 
     try:
-        value = float(digits[0])
+        value = float(partes[0])
     except ValueError:
         return None
 
@@ -100,9 +110,13 @@ def _parse_age_years(age: int | float | str | None) -> float | None:
 
 
 def _fmt(d: date) -> str:
-    """Formata uma data para o padrão brasileiro."""
+    """Formata uma data no padrão brasileiro."""
     return d.strftime("%d/%m/%Y")
 
+
+# ---------------------------------------------------------------------------
+# Avaliação principal
+# ---------------------------------------------------------------------------
 
 def evaluate_pet(
     pet: Pet,
@@ -111,9 +125,12 @@ def evaluate_pet(
     """Aplica todas as regras e devolve alertas + score de risco (0-100)."""
 
     today = today or date.today()
+
     alerts: list[Alert] = []
 
-    # ---------------------------- Vacinação ---------------------------------
+    # -----------------------------------------------------------------------
+    # Vacinação
+    # -----------------------------------------------------------------------
 
     if not pet.vaccines:
         alerts.append(
@@ -123,18 +140,17 @@ def evaluate_pet(
                 title="Nenhuma vacina registrada",
                 detail=(
                     f"{pet.name} não possui carteira de vacinação no app. "
-                    "Sem esse histórico não é possível acompanhar a proteção do pet."
+                    "Sem esse histórico não é possível acompanhar "
+                    "adequadamente a proteção do pet."
                 ),
             )
         )
 
     for vaccine in pet.vaccines:
+        # O schema usa nextDue.
+        due = _parse(vaccine.nextDue)
 
-        # CORREÇÃO:
-        # O atributo Python é next_due.
-        # nextDue é apenas o alias usado no JSON.
-        due = _parse(vaccine.next_due)
-
+        # Vacina não marcada como aplicada.
         if not vaccine.done:
             alerts.append(
                 Alert(
@@ -145,16 +161,18 @@ def evaluate_pet(
                         f"A dose de {vaccine.name} ainda não foi "
                         "marcada como aplicada."
                     ),
-                    dueDate=vaccine.next_due or None,
+                    dueDate=vaccine.nextDue or None,
                 )
             )
             continue
 
+        # Se não houver data válida, não é possível comparar vencimento.
         if due is None:
             continue
 
         dias = (due - today).days
 
+        # Vacina vencida.
         if dias < 0:
             alerts.append(
                 Alert(
@@ -162,13 +180,15 @@ def evaluate_pet(
                     severity=AlertSeverity.CRITICO,
                     title=f"Vacina vencida: {vaccine.name}",
                     detail=(
-                        f"O reforço de {vaccine.name} venceu em {_fmt(due)} "
+                        f"O reforço de {vaccine.name} venceu em "
+                        f"{_fmt(due)} "
                         f"({abs(dias)} dias de atraso)."
                     ),
-                    dueDate=vaccine.next_due,
+                    dueDate=vaccine.nextDue,
                 )
             )
 
+        # Vacina próxima do vencimento.
         elif dias <= DIAS_ALERTA_ANTECIPADO:
             alerts.append(
                 Alert(
@@ -179,21 +199,20 @@ def evaluate_pet(
                         f"O reforço de {vaccine.name} vence em "
                         f"{dias} dias ({_fmt(due)})."
                     ),
-                    dueDate=vaccine.next_due,
+                    dueDate=vaccine.nextDue,
                 )
             )
 
-    # ---------------------------- Medicação ---------------------------------
+    # -----------------------------------------------------------------------
+    # Medicação
+    # -----------------------------------------------------------------------
 
     for med in pet.medications:
-
         if not med.active:
             continue
 
-        # CORREÇÃO:
-        # O atributo Python é end_date.
-        # endDate é apenas o alias usado no JSON.
-        fim = _parse(med.end_date)
+        # O schema usa endDate.
+        fim = _parse(med.endDate)
 
         alerts.append(
             Alert(
@@ -208,10 +227,11 @@ def evaluate_pet(
                         else ""
                     )
                 ),
-                dueDate=med.end_date or None,
+                dueDate=med.endDate or None,
             )
         )
 
+        # Tratamento terminando nos próximos 3 dias.
         if fim and 0 <= (fim - today).days <= 3:
             alerts.append(
                 Alert(
@@ -219,25 +239,25 @@ def evaluate_pet(
                     severity=AlertSeverity.ATENCAO,
                     title=f"Fim de tratamento: {med.name}",
                     detail=(
-                        f"O tratamento com {med.name} termina em {_fmt(fim)}. "
-                        "Confirme com a clínica se há necessidade de retorno "
-                        "ou reavaliação."
+                        f"O tratamento com {med.name} termina em "
+                        f"{_fmt(fim)}. Confirme com a clínica se há "
+                        "necessidade de retorno ou reavaliação."
                     ),
-                    dueDate=med.end_date,
+                    dueDate=med.endDate,
                 )
             )
 
-    # ---------------------------- Check-up ----------------------------------
+    # -----------------------------------------------------------------------
+    # Check-up
+    # -----------------------------------------------------------------------
 
-    # CORREÇÃO:
-    # O atributo Python é next_checkup.
-    # nextCheckup é apenas o alias usado no JSON.
-    checkup = _parse(pet.next_checkup)
+    # O schema usa nextCheckup.
+    checkup = _parse(pet.nextCheckup)
 
     if checkup:
-
         dias = (checkup - today).days
 
+        # Check-up atrasado.
         if dias < 0:
             alerts.append(
                 Alert(
@@ -248,10 +268,11 @@ def evaluate_pet(
                         f"O check-up estava previsto para {_fmt(checkup)} "
                         f"e está {abs(dias)} dias atrasado."
                     ),
-                    dueDate=pet.next_checkup,
+                    dueDate=pet.nextCheckup,
                 )
             )
 
+        # Check-up próximo.
         elif dias <= DIAS_ALERTA_ANTECIPADO:
             alerts.append(
                 Alert(
@@ -262,16 +283,23 @@ def evaluate_pet(
                         f"Check-up previsto para {_fmt(checkup)} "
                         f"(em {dias} dias)."
                     ),
-                    dueDate=pet.next_checkup,
+                    dueDate=pet.nextCheckup,
                 )
             )
 
-    # ------------------------- Faixa etária ---------------------------------
+    # -----------------------------------------------------------------------
+    # Faixa etária
+    # -----------------------------------------------------------------------
 
     idade = _parse_age_years(pet.age)
 
     especie = (pet.species or "").strip().lower()
 
+    # Cachorros/dogs:
+    # >= 7 anos = geriátrico.
+    #
+    # Outras espécies:
+    # >= 10 anos = geriátrico.
     limite_idoso = (
         7
         if especie.startswith("cach")
@@ -287,13 +315,16 @@ def evaluate_pet(
                 title="Pet em fase geriátrica",
                 detail=(
                     f"{pet.name} tem {pet.age} anos e entra na faixa "
-                    "geriátrica para a espécie. Acompanhamento semestral "
-                    "é recomendado nessa fase."
+                    "geriátrica considerada para a espécie. "
+                    "Acompanhamento periódico mais frequente "
+                    "pode ser recomendado nessa fase."
                 ),
             )
         )
 
-    # ------------------------------ Score -----------------------------------
+    # -----------------------------------------------------------------------
+    # Score de risco
+    # -----------------------------------------------------------------------
 
     score = min(
         100,
@@ -303,13 +334,16 @@ def evaluate_pet(
         ),
     )
 
-    label = (
-        "baixo"
-        if score < 30
-        else "medio"
-        if score < 60
-        else "alto"
-    )
+    if score < 30:
+        label = "baixo"
+    elif score < 60:
+        label = "medio"
+    else:
+        label = "alto"
+
+    # -----------------------------------------------------------------------
+    # Ordenação
+    # -----------------------------------------------------------------------
 
     ordem = {
         AlertSeverity.CRITICO: 0,
@@ -320,6 +354,10 @@ def evaluate_pet(
     alerts.sort(
         key=lambda alert: ordem[alert.severity]
     )
+
+    # -----------------------------------------------------------------------
+    # Resposta
+    # -----------------------------------------------------------------------
 
     return AlertsResponse(
         petId=pet.id,
