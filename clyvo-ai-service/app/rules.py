@@ -1,19 +1,5 @@
-
-"""Motor de regras determinístico da jornada de saúde.
-
-O que é crítico (vacina vencida, medicação em curso, retorno atrasado) NÃO passa
-pelo LLM: é calculado aqui, de forma auditável e reproduzível. O LLM apenas
-recebe esse resultado como contexto e o traduz em linguagem natural.
-"""
-
 from datetime import date, datetime
-
 from .schemas import Alert, AlertSeverity, AlertsResponse, Pet
-
-
-# ---------------------------------------------------------------------------
-# Pesos de risco por código de alerta
-# ---------------------------------------------------------------------------
 
 RISK_WEIGHTS: dict[str, int] = {
     "VACINA_VENCIDA": 30,
@@ -30,12 +16,10 @@ RISK_WEIGHTS: dict[str, int] = {
 DIAS_ALERTA_ANTECIPADO = 30
 
 
-# ---------------------------------------------------------------------------
-# Utilitários
-# ---------------------------------------------------------------------------
+
 
 def _parse(value: str | None) -> date | None:
-    """Aceita ISO, formato BR e ISO com horário."""
+
     if not value:
         return None
 
@@ -65,16 +49,7 @@ def _parse(value: str | None) -> date | None:
 def _parse_age_years(
     age: int | float | str | None,
 ) -> float | None:
-    """
-    Extrai a idade em anos.
 
-    Aceita:
-    - 3
-    - 3.5
-    - "3"
-    - "3 anos"
-    - "36 meses"
-    """
 
     if age is None:
         return None
@@ -87,7 +62,7 @@ def _parse_age_years(
     if not raw_age:
         return None
 
-    # Normaliza vírgula decimal.
+
     raw_age = raw_age.replace(",", ".")
 
     partes = "".join(
@@ -110,27 +85,20 @@ def _parse_age_years(
 
 
 def _fmt(d: date) -> str:
-    """Formata uma data no padrão brasileiro."""
+
     return d.strftime("%d/%m/%Y")
 
-
-# ---------------------------------------------------------------------------
-# Avaliação principal
-# ---------------------------------------------------------------------------
 
 def evaluate_pet(
     pet: Pet,
     today: date | None = None,
 ) -> AlertsResponse:
-    """Aplica todas as regras e devolve alertas + score de risco (0-100)."""
+
 
     today = today or date.today()
 
     alerts: list[Alert] = []
 
-    # -----------------------------------------------------------------------
-    # Vacinação
-    # -----------------------------------------------------------------------
 
     if not pet.vaccines:
         alerts.append(
@@ -147,10 +115,10 @@ def evaluate_pet(
         )
 
     for vaccine in pet.vaccines:
-        # O schema usa nextDue.
+
         due = _parse(vaccine.nextDue)
 
-        # Vacina não marcada como aplicada.
+  
         if not vaccine.done:
             alerts.append(
                 Alert(
@@ -166,13 +134,12 @@ def evaluate_pet(
             )
             continue
 
-        # Se não houver data válida, não é possível comparar vencimento.
+
         if due is None:
             continue
 
         dias = (due - today).days
 
-        # Vacina vencida.
         if dias < 0:
             alerts.append(
                 Alert(
@@ -188,7 +155,7 @@ def evaluate_pet(
                 )
             )
 
-        # Vacina próxima do vencimento.
+
         elif dias <= DIAS_ALERTA_ANTECIPADO:
             alerts.append(
                 Alert(
@@ -203,15 +170,12 @@ def evaluate_pet(
                 )
             )
 
-    # -----------------------------------------------------------------------
-    # Medicação
-    # -----------------------------------------------------------------------
 
     for med in pet.medications:
         if not med.active:
             continue
 
-        # O schema usa endDate.
+
         fim = _parse(med.endDate)
 
         alerts.append(
@@ -231,7 +195,7 @@ def evaluate_pet(
             )
         )
 
-        # Tratamento terminando nos próximos 3 dias.
+
         if fim and 0 <= (fim - today).days <= 3:
             alerts.append(
                 Alert(
@@ -247,17 +211,14 @@ def evaluate_pet(
                 )
             )
 
-    # -----------------------------------------------------------------------
-    # Check-up
-    # -----------------------------------------------------------------------
 
-    # O schema usa nextCheckup.
+
     checkup = _parse(pet.nextCheckup)
 
     if checkup:
         dias = (checkup - today).days
 
-        # Check-up atrasado.
+
         if dias < 0:
             alerts.append(
                 Alert(
@@ -272,7 +233,7 @@ def evaluate_pet(
                 )
             )
 
-        # Check-up próximo.
+
         elif dias <= DIAS_ALERTA_ANTECIPADO:
             alerts.append(
                 Alert(
@@ -287,19 +248,9 @@ def evaluate_pet(
                 )
             )
 
-    # -----------------------------------------------------------------------
-    # Faixa etária
-    # -----------------------------------------------------------------------
 
     idade = _parse_age_years(pet.age)
-
     especie = (pet.species or "").strip().lower()
-
-    # Cachorros/dogs:
-    # >= 7 anos = geriátrico.
-    #
-    # Outras espécies:
-    # >= 10 anos = geriátrico.
     limite_idoso = (
         7
         if especie.startswith("cach")
@@ -322,10 +273,6 @@ def evaluate_pet(
             )
         )
 
-    # -----------------------------------------------------------------------
-    # Score de risco
-    # -----------------------------------------------------------------------
-
     score = min(
         100,
         sum(
@@ -340,10 +287,6 @@ def evaluate_pet(
         label = "medio"
     else:
         label = "alto"
-
-    # -----------------------------------------------------------------------
-    # Ordenação
-    # -----------------------------------------------------------------------
 
     ordem = {
         AlertSeverity.CRITICO: 0,

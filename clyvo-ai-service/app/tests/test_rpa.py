@@ -1,5 +1,3 @@
-"""Testes do RPA de notificações (padrão AAA)."""
-
 import json
 from datetime import date, timedelta
 
@@ -16,7 +14,6 @@ TOKEN = {"X-RPA-Token": settings.rpa_token}
 
 @pytest.fixture(autouse=True)
 def banco_temporario(tmp_path, monkeypatch):
-    """Isola o SQLite do RPA e força o modo simulado de e-mail."""
     monkeypatch.setattr(settings, "rpa_db_path", str(tmp_path / "rpa.db"))
     monkeypatch.setattr(settings, "email_provider", "console")
     yield
@@ -41,43 +38,32 @@ def _pet(**kwargs) -> dict:
 
 
 def test_carteira_semente_usa_o_email_mockado():
-    # Arrange / Act
     inscricoes = carteira.listar()
-    # Assert
     assert inscricoes
     assert all(i.tutor_email == "emanuelitaloleal@hotmail.com" for i in inscricoes)
 
 
 def test_execucao_envia_para_pet_com_vacina_vencida():
-    # Arrange
     resultado = job.executar(hoje=date.today())
-    # Assert
     enviados = [item for item in resultado.itens if item.status == "enviado"]
     assert enviados
     assert any("VACINA_VENCIDA" in item.alertas for item in enviados)
 
 
 def test_nao_reenvia_no_mesmo_dia():
-    # Arrange
     job.executar(hoje=date.today())
-    # Act
     segunda = job.executar(hoje=date.today())
-    # Assert
     assert segunda.enviados == 0
     assert any(item.status == "ja_enviado_hoje" for item in segunda.itens)
 
 
 def test_forcar_ignora_a_trava_diaria():
-    # Arrange
     job.executar(hoje=date.today())
-    # Act
     forcado = job.executar(hoje=date.today(), forcar=True)
-    # Assert
     assert forcado.enviados > 0
 
 
 def test_pet_sem_pendencia_nao_recebe_email(monkeypatch):
-    # Arrange
     futuro = (date.today() + timedelta(days=200)).isoformat()
     saudavel = _pet(
         id="pet-saudavel",
@@ -105,29 +91,27 @@ def test_pet_sem_pendencia_nao_recebe_email(monkeypatch):
         ],
     )
 
-    # Act
-    resultado = job.executar(hoje=date.today())
 
-    # Assert
+    resultado = job.executar(hoje=date.today())
     assert resultado.enviados == 0
     assert resultado.itens[0].status == "sem_pendencia"
 
 
 def test_endpoint_run_exige_token():
-    # Arrange
+
     client = TestClient(app)
-    # Act
+    
     sem_token = client.post("/api/rpa/run")
-    # Assert
+
     assert sem_token.status_code == 401
 
 
 def test_endpoint_run_dispara_a_rotina():
-    # Arrange
+
     client = TestClient(app)
-    # Act
+
     resposta = client.post("/api/rpa/run?forcar=true", headers=TOKEN)
-    # Assert
+
     assert resposta.status_code == 200
     corpo = resposta.json()
     assert corpo["total"] >= 1
@@ -135,11 +119,11 @@ def test_endpoint_run_dispara_a_rotina():
 
 
 def test_status_expoe_agendamento_e_carteira():
-    # Arrange
+
     client = TestClient(app)
-    # Act
+
     corpo = client.get("/api/rpa/status").json()
-    # Assert
+
     assert corpo["petsMonitorados"] >= 1
     assert ":" in corpo["schedule"]
 

@@ -1,10 +1,6 @@
-"""Ponto de entrada do serviço de IA da CLYVO VET."""
-
 import logging
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from .config import settings
 from .llm import llm_client
 from .rag import knowledge_base
@@ -38,7 +34,6 @@ app.include_router(rpa.router)
 
 @app.on_event("startup")
 async def iniciar_rpa() -> None:
-    """Liga o agendador diário de notificações junto com a API."""
     scheduler.iniciar()
 
 
@@ -49,7 +44,6 @@ async def encerrar_rpa() -> None:
 
 @app.get("/health", tags=["infra"])
 def health() -> dict:
-    """Health check — usado pelo App Service / ACI e pela pipeline de CD."""
     return {
         "status": "ok",
         "version": settings.app_version,

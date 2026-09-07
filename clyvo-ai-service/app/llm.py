@@ -1,16 +1,10 @@
 from __future__ import annotations
-
 import json
 import re
-
 import httpx
-
 from .config import settings
-
-
 class LLMError(RuntimeError):
     pass
-
 
 def extract_json(raw: str) -> dict:
     if not raw:

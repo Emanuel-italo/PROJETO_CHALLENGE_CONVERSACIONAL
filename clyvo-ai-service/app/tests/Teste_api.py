@@ -1,7 +1,4 @@
-"""Testes de integração da API (rodam em modo simulado, sem chamar LLM)."""
-
 from fastapi.testclient import TestClient
-
 from app.main import app
 from app.schemas import SuggestedAction, Urgency
 

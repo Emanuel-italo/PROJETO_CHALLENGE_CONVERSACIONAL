@@ -1,11 +1,6 @@
-"""Endpoints de controle do RPA de notificações."""
-
 from __future__ import annotations
-
 from datetime import date
-
 from fastapi import APIRouter, Header, HTTPException, Response
-
 from ..config import settings
 from .. import carteira, job, scheduler
 from ..schemas import RpaExecucao, RpaInscricaoRequest, RpaItem, RpaStatus
@@ -20,7 +15,7 @@ def _autorizar(token: str | None) -> None:
 
 @router.get("/status", response_model=RpaStatus)
 def status() -> RpaStatus:
-    """Estado da rotina: agendamento, provedor de e-mail e últimos envios."""
+
     inscricoes = carteira.listar()
 
     return RpaStatus(
@@ -40,11 +35,7 @@ def run(
     forcar: bool = False,
     x_rpa_token: str | None = Header(default=None, alias="X-RPA-Token"),
 ) -> RpaExecucao:
-    """Dispara a rotina agora.
 
-    É o mesmo código do agendamento diário. Serve para o cron externo e para
-    demonstrar a execução no vídeo sem esperar o horário.
-    """
     _autorizar(x_rpa_token)
 
     resultado = job.executar(forcar=forcar)
@@ -55,7 +46,6 @@ def run(
         enviados=resultado.enviados,
         ignorados=resultado.ignorados,
         falhas=resultado.falhas,
-        # O HTML completo do preview não volta no run: só o resumo do envio.
         itens=[
             RpaItem(**{**item.__dict__, "detalhe": item.detalhe[:200]})
             for item in resultado.itens
@@ -68,7 +58,7 @@ def preview(
     petId: str,
     x_rpa_token: str | None = Header(default=None, alias="X-RPA-Token"),
 ) -> Response:
-    """Devolve o HTML do e-mail daquele pet, sem enviar nada."""
+
     _autorizar(x_rpa_token)
 
     resultado = job.executar(apenas_preview=True)
@@ -88,10 +78,7 @@ def inscrever(
     request: RpaInscricaoRequest,
     x_rpa_token: str | None = Header(default=None, alias="X-RPA-Token"),
 ) -> RpaStatus:
-    """Inscreve ou atualiza um pet na carteira monitorada.
 
-    É por aqui que o aplicativo mantém o RPA em dia com os dados reais do tutor.
-    """
     _autorizar(x_rpa_token)
 
     carteira.salvar(

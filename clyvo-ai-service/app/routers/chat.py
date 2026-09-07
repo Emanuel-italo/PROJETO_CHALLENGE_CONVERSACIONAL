@@ -1,11 +1,6 @@
-"""Endpoint conversacional: contexto do pet + RAG + LLM + guardrails."""
-
 from __future__ import annotations
-
 import logging
-
 from fastapi import APIRouter
-
 from ..llm import LLMError, llm_client
 from ..prompts import SYSTEM_PROMPT, build_knowledge_context, build_pet_context
 from ..rag import knowledge_base
@@ -33,14 +28,14 @@ def _coerce(value: str | None, enum_cls, default):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    # 1. Fatos determinísticos sobre o pet (motor de regras).
+   
     evaluation = evaluate_pet(request.pet) if request.pet else None
 
-    # 2. Recuperação semântica na base de conhecimento veterinária.
+
     passages = knowledge_base.search(request.message)
     sources = [chunk.title for chunk, _ in passages]
 
-    # 3. Montagem do prompt: contexto do pet + material de apoio + pergunta.
+
     blocos = [
         build_pet_context(request.pet, evaluation),
         build_knowledge_context([(chunk.title, chunk.text) for chunk, _ in passages]),
@@ -51,7 +46,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     historico = [{"role": m.role, "content": m.content} for m in request.history[-8:]]
     messages = [*historico, {"role": "user", "content": user_content}]
 
-    # 4. Geração: LLM quando configurado, simulador determinístico caso contrário.
+
     simulated = False
     if llm_client.enabled:
         try:
@@ -69,9 +64,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     reply = str(raw.get("reply") or "").strip()
     reason = str(raw.get("reason") or "").strip()
 
-    # 5. Guardrail de segurança: o modelo pode subestimar, nunca subestimamos.
-    #    Se o relato contém termo da lista de emergência, a urgência é elevada
-    #    no código, independentemente do que o LLM classificou.
+
     texto = _fold(request.message)
     if any(t in texto for t in TERMOS_EMERGENCIA):
         if ORDEM_URGENCIA[urgency] < ORDEM_URGENCIA[Urgency.EMERGENCIA]:

@@ -1,16 +1,4 @@
-"""Camada de recuperação (RAG) sobre a base de conhecimento veterinária.
-
-Dois backends, escolhidos por RAG_BACKEND:
-
-* ``chroma``  — ChromaDB persistente, com embeddings vetoriais. Modo de produção.
-* ``simple``  — retriever TF-IDF implementado aqui, sem dependência externa.
-  Garante que o serviço sobe e demonstra em qualquer máquina, inclusive offline.
-
-A interface pública é a mesma nos dois casos: ``knowledge_base.search(query)``.
-"""
-
 from __future__ import annotations
-
 import math
 import re
 import unicodedata
@@ -26,9 +14,6 @@ STOPWORDS = {
     "essa", "esse", "mais", "muito", "ja", "nao", "sim", "the", "of", "and",
 }
 
-
-# Expansão de sinônimos: aproxima o vocabulário do tutor ("comendo menos") do
-# vocabulário técnico da base ("recusa alimentar"). Aplicada só na consulta.
 EXPANSOES = {
     "comendo": ["alimentar", "apetite", "recusa"],
     "comer": ["alimentar", "apetite", "recusa"],
@@ -55,7 +40,6 @@ def _expand(tokens: list[str]) -> list[str]:
 
 
 def _normalize(text: str) -> list[str]:
-    """Minúsculas, sem acento, sem pontuação e sem stopwords."""
     text = unicodedata.normalize("NFKD", text.lower())
     text = "".join(c for c in text if not unicodedata.combining(c))
     return [t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 2 and t not in STOPWORDS]
@@ -70,7 +54,6 @@ class Chunk:
 
 
 def load_chunks() -> list[Chunk]:
-    """Carrega os .md da base e quebra por seção (## título)."""
     chunks: list[Chunk] = []
     for path in sorted(settings.knowledge_dir.glob("*.md")):
         raw = path.read_text(encoding="utf-8")
@@ -89,7 +72,7 @@ def load_chunks() -> list[Chunk]:
 
 
 class SimpleRetriever:
-    """TF-IDF + similaridade de cosseno, em Python puro."""
+
 
     def __init__(self, chunks: list[Chunk]) -> None:
         self.chunks = chunks
@@ -118,10 +101,10 @@ class SimpleRetriever:
 
 
 class ChromaRetriever:
-    """Busca vetorial com ChromaDB persistente."""
+
 
     def __init__(self, chunks: list[Chunk]) -> None:
-        import chromadb  # importado sob demanda: exigido só neste backend
+        import chromadb  
 
         self.chunks = {c.id: c for c in chunks}
         self.client = chromadb.PersistentClient(path=settings.chroma_dir)
@@ -162,7 +145,7 @@ class KnowledgeBase:
                 if self.backend_name == "chroma"
                 else SimpleRetriever(self.chunks)
             )
-        except Exception:  # chromadb ausente ou falha de índice
+        except Exception: 
             self.backend_name = "simple (fallback)"
             self.retriever = SimpleRetriever(self.chunks)
 

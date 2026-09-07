@@ -1,6 +1,4 @@
-# Sinais de emergencia e triagem
 
-## Atendimento imediato
 Os quadros abaixo caracterizam emergencia veterinaria e demandam pronto atendimento,
 sem espera por horario comercial e sem tentativa de manejo em casa: dificuldade
 respiratoria, respiracao ofegante persistente ou lingua arroxeada; convulsao ou perda
@@ -11,19 +9,19 @@ chocolate, xilitol, uva ou cebola; incapacidade de urinar, sobretudo em gatos ma
 prostracao extrema ou mucosas palidas; trauma, atropelamento ou queda de altura;
 hipertermia por calor, comum em animais deixados dentro de veiculos.
 
-## Consulta em 24 a 48 horas
+
 Vomito ou diarreia por mais de 24 horas; recusa alimentar por mais de 24 horas em caes
 e mais de 12 horas em gatos, porque o jejum felino prolongado leva a lipidose hepatica;
 tosse persistente; claudicacao que nao melhora; aumento subito de sede e de volume
 urinario; coceira intensa com ferida aberta; secrecao ocular ou nasal purulenta;
 alteracao de comportamento sem causa aparente.
 
-## Observacao domiciliar
+
 Episodio isolado de vomito em animal ativo e hidratado, reducao leve de apetite por
 poucas horas, espirro ocasional e cansaco apos atividade intensa podem ser observados
 em casa por 12 a 24 horas, com registro da evolucao no aplicativo. Piora ou surgimento
 de qualquer sinal da lista de emergencia muda a conduta imediatamente.
 
-## Regra de ouro
+
 Na duvida entre observar e levar a clinica, a conduta correta e levar a clinica.
 Nenhuma orientacao remota substitui o exame fisico do medico veterinario.

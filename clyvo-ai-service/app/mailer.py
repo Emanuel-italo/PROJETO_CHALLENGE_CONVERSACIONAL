@@ -1,21 +1,9 @@
-"""Envio de e-mail com três provedores intercambiáveis.
-
-- ``console``: apenas registra no log. É o padrão, para rodar sem credencial.
-- ``smtp``   : SMTP autenticado (Gmail com senha de app, Outlook, etc.).
-- ``resend`` : API HTTP do Resend, útil quando o host bloqueia portas SMTP.
-
-Nenhuma credencial vive no código: tudo vem de variável de ambiente.
-"""
-
 from __future__ import annotations
-
 import logging
 import smtplib
 import ssl
 from email.message import EmailMessage
-
 import httpx
-
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -92,7 +80,6 @@ def _enviar_resend(destino: str, assunto: str, html: str, texto: str) -> str:
 
 
 def enviar(destino: str, assunto: str, html: str, texto: str) -> str:
-    """Envia e devolve o provedor usado. Levanta EmailError em caso de falha."""
     provedor = settings.email_provider.strip().lower()
 
     if settings.rpa_dry_run or provedor == "console":

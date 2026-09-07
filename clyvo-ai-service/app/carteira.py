@@ -1,16 +1,4 @@
-"""Carteira de pets acompanhada pelo RPA.
-
-Enquanto a base de produção não está integrada, a carteira vem de um arquivo
-JSON versionado (`carteira.json`) e pode ser atualizada em tempo de execução
-pelo aplicativo, via `POST /api/rpa/pets`, o que grava em SQLite.
-
-A leitura junta as duas origens: o que veio do app tem precedência sobre o
-arquivo, casando pelo id do pet. Trocar isso pelo Oracle da aplicação depois
-significa reescrever apenas `listar()`.
-"""
-
 from __future__ import annotations
-
 import json
 import sqlite3
 from pathlib import Path
@@ -20,8 +8,6 @@ from .schemas import Pet
 
 
 class Inscricao:
-    """Um pet acompanhado, com o e-mail do tutor."""
-
     def __init__(self, pet: Pet, tutor_nome: str, tutor_email: str) -> None:
         self.pet = pet
         self.tutor_nome = tutor_nome
@@ -128,7 +114,6 @@ def _do_banco() -> list[Inscricao]:
 
 
 def listar() -> list[Inscricao]:
-    """Carteira completa: arquivo semente sobrescrito pelo que veio do app."""
     por_id: dict[str, Inscricao] = {i.pet.id: i for i in _do_arquivo()}
 
     for inscricao in _do_banco():
@@ -136,10 +121,6 @@ def listar() -> list[Inscricao]:
 
     return list(por_id.values())
 
-
-# --------------------------------------------------------------------------- #
-# Registro de envios (evita duplicar no mesmo dia)
-# --------------------------------------------------------------------------- #
 def ja_enviado_hoje(pet_id: str, hoje: str) -> bool:
     criar_schema()
 

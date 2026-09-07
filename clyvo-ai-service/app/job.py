@@ -1,11 +1,7 @@
-"""Rotina do RPA: varre a carteira, aplica as regras e notifica o tutor."""
-
 from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from datetime import date
-
 from .rules import evaluate_pet
 from .schemas import AlertSeverity
 from . import carteira, templates
@@ -13,8 +9,7 @@ from .mailer import EmailError, enviar
 
 logger = logging.getLogger(__name__)
 
-# Só gera e-mail o alerta que exige ação do tutor. "Medicação em curso" é
-# informativo e sozinho não justifica notificação.
+
 CODIGOS_NOTIFICAVEIS = {
     "VACINA_VENCIDA",
     "VACINA_A_VENCER",
@@ -53,11 +48,7 @@ def executar(
     forcar: bool = False,
     apenas_preview: bool = False,
 ) -> ResultadoExecucao:
-    """Executa a varredura.
 
-    `forcar` ignora a trava de um envio por pet por dia.
-    `apenas_preview` monta o e-mail sem enviar, para inspeção via API.
-    """
     hoje = hoje or date.today()
     dia = hoje.isoformat()
 
@@ -96,7 +87,7 @@ def executar(
             resultado.itens.append(item)
             continue
 
-        # Só os alertas acionáveis entram no e-mail.
+
         avaliacao_email = avaliacao.model_copy(update={"alerts": acionaveis})
 
         assunto = templates.montar_assunto(pet, avaliacao_email)

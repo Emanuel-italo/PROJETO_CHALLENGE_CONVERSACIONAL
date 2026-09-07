@@ -1,10 +1,3 @@
-"""Prompt de sistema do assistente e montagem do contexto enviado ao modelo.
-
-Os guardrails ficam declarados aqui e são reforçados no código:
-`routers/chat.py` eleva a urgência quando o relato contém sinal de emergência,
-independentemente da classificação devolvida pelo LLM.
-"""
-
 from .schemas import AlertsResponse, Pet
 
 
@@ -75,7 +68,6 @@ def build_pet_context(
     pet: Pet | None,
     evaluation: AlertsResponse | None,
 ) -> str:
-    """Serializa o prontuário do pet em texto, para entrar no prompt."""
 
     if pet is None:
         return (
@@ -152,7 +144,7 @@ def build_pet_context(
 def build_knowledge_context(
     passages: list[tuple[str, str]],
 ) -> str:
-    """Recebe uma lista de (título, texto) devolvida pelo RAG."""
+
 
     if not passages:
         return ""
