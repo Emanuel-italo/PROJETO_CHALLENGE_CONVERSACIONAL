@@ -19,6 +19,9 @@ import {
   Keyboard,
   Animated,
   Easing,
+  Image,
+  Share,
+  Linking,
 } from "react-native";
 
 import { useNavigation } from "@react-navigation/native";
@@ -83,12 +86,17 @@ export default function PetChatScreen() {
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [showQuickActions, setShowQuickActions] = useState(false);
+  const [showQuickActions, setShowQuickActions] =
+    useState(false);
+  const [showTriage, setShowTriage] =
+    useState(false);
+  const [likedMessages, setLikedMessages] =
+    useState<Record<number, "like" | "dislike">>({});
 
   const scrollRef = useRef<ScrollView>(null);
 
   /* =========================================================
-     ANIMAÇÕES
+     ANIMAÇÕES GLOBAIS
   ========================================================= */
 
   const avatarPulse = useRef(
@@ -111,29 +119,50 @@ export default function PetChatScreen() {
     new Animated.Value(0),
   ).current;
 
+  const triageAnimation = useRef(
+    new Animated.Value(0),
+  ).current;
+
   useEffect(() => {
     Animated.parallel([
-      Animated.spring(avatarPulse, {
-        toValue: 1.06,
-        friction: 5,
-        tension: 35,
-        useNativeDriver: true,
-      }),
-
-      Animated.timing(avatarGlow, {
-        toValue: 0.7,
-        duration: 1000,
-        easing: Easing.inOut(Easing.ease),
-        useNativeDriver: true,
-      }),
-
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(avatarPulse, {
+            toValue: 1.045,
+            duration: 1200,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(avatarPulse, {
+            toValue: 1,
+            duration: 1200,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(avatarGlow, {
+            toValue: 0.7,
+            duration: 1400,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(avatarGlow, {
+            toValue: 0.25,
+            duration: 1400,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
       Animated.spring(welcomeScale, {
         toValue: 1,
         friction: 7,
-        tension: 45,
+        tension: 42,
         useNativeDriver: true,
       }),
-
       Animated.timing(welcomeOpacity, {
         toValue: 1,
         duration: 700,
@@ -141,6 +170,11 @@ export default function PetChatScreen() {
         useNativeDriver: true,
       }),
     ]).start();
+
+    return () => {
+      avatarPulse.stopAnimation();
+      avatarGlow.stopAnimation();
+    };
   }, []);
 
   useEffect(() => {
@@ -149,7 +183,7 @@ export default function PetChatScreen() {
       return;
     }
 
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(typingAnimation, {
           toValue: 1,
@@ -164,17 +198,36 @@ export default function PetChatScreen() {
           useNativeDriver: true,
         }),
       ]),
-    ).start();
+    );
+
+    loop.start();
+
+    return () => {
+      loop.stop();
+    };
   }, [sending]);
 
   useEffect(() => {
-    const timer = setTimeout(
-      () =>
-        scrollRef.current?.scrollToEnd({
-          animated: true,
-        }),
-      100,
-    );
+    if (!showTriage) {
+      return;
+    }
+
+    triageAnimation.setValue(0);
+
+    Animated.spring(triageAnimation, {
+      toValue: 1,
+      friction: 8,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [showTriage]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({
+        animated: true,
+      });
+    }, 120);
 
     return () => clearTimeout(timer);
   }, [messages.length, sending]);
@@ -186,7 +239,9 @@ export default function PetChatScreen() {
   const handleSend = async (text?: string) => {
     const content = (text ?? input).trim();
 
-    if (!content || sending) return;
+    if (!content || sending) {
+      return;
+    }
 
     setInput("");
     setShowSuggestions(false);
@@ -198,7 +253,7 @@ export default function PetChatScreen() {
   };
 
   /* =========================================================
-     LIMPAR CHAT
+     LIMPAR CONVERSA
   ========================================================= */
 
   const handleClearChat = () => {
@@ -222,6 +277,8 @@ export default function PetChatScreen() {
 
             setShowSuggestions(true);
             setShowQuickActions(false);
+            setShowTriage(false);
+            setLikedMessages({});
 
             setTimeout(() => {
               scrollRef.current?.scrollTo({
@@ -278,18 +335,81 @@ export default function PetChatScreen() {
   ) => {
     const destino = acaoDestino[action];
 
-    if (!destino) return;
+    if (!destino) {
+      return;
+    }
+
+    setShowQuickActions(false);
 
     navigation.navigate(destino as never);
   };
+
+  /* =========================================================
+     TRIAGEM
+  ========================================================= */
+
+  const handleTriage = (symptom: string) => {
+    setShowTriage(false);
+    setShowSuggestions(false);
+
+    handleSend(
+      `Quero fazer uma triagem. O meu pet está com ${symptom}.`,
+    );
+  };
+
+  /* =========================================================
+     FEEDBACK
+  ========================================================= */
+
+  const handleFeedback = (
+    index: number,
+    value: "like" | "dislike",
+  ) => {
+    setLikedMessages((current) => ({
+      ...current,
+      [index]: value,
+    }));
+  };
+
+  /* =========================================================
+     COMPARTILHAR
+  ========================================================= */
+
+  const handleShare = async (text: string) => {
+    try {
+      await Share.share({
+        message: text,
+      });
+    } catch {
+      // Não interrompe o funcionamento do chat
+    }
+  };
+
+  /* =========================================================
+     TRIAGEM / URGÊNCIA
+  ========================================================= */
 
   const urgente =
     lastResult?.urgency === "alta" ||
     lastResult?.urgency === "emergencia";
 
+  const emergencia =
+    lastResult?.urgency === "emergencia";
+
   const destino = lastResult
     ? acaoDestino[lastResult.suggestedAction]
     : undefined;
+
+  /* =========================================================
+     FOTO DO PET
+     ========================================================= */
+
+  const petImage =
+    (pet as any)?.imageUri ??
+    (pet as any)?.photoUri ??
+    (pet as any)?.image ??
+    (pet as any)?.photo ??
+    null;
 
   /* =========================================================
      RENDER
@@ -306,11 +426,12 @@ export default function PetChatScreen() {
       keyboardVerticalOffset={0}
     >
       {/* =====================================================
-          HEADER PREMIUM
+          HEADER
       ====================================================== */}
 
       <View style={extra.header}>
-        <View style={extra.headerTopGlow} />
+        <View style={extra.headerGlowOne} />
+        <View style={extra.headerGlowTwo} />
 
         <TouchableOpacity
           style={extra.headerButton}
@@ -324,7 +445,6 @@ export default function PetChatScreen() {
           />
         </TouchableOpacity>
 
-        {/* Avatar animado */}
         <View style={extra.avatarWrapper}>
           <Animated.View
             style={[
@@ -352,31 +472,55 @@ export default function PetChatScreen() {
               },
             ]}
           >
-            <Ionicons
-              name="paw"
-              size={21}
-              color={Colors.white}
-            />
+            {petImage ? (
+              <Image
+                source={{
+                  uri: petImage,
+                }}
+                style={extra.petImage}
+              />
+            ) : (
+              <Ionicons
+                name="paw"
+                size={21}
+                color={Colors.white}
+              />
+            )}
+
+            <View style={extra.headerOnlineDot} />
           </Animated.View>
         </View>
 
         <View style={extra.headerInfo}>
-          <Text style={extra.headerTitle}>
-            {pet
-              ? `Clyvo · ${pet.name}`
-              : "Assistente Clyvo"}
-          </Text>
+          <View style={extra.headerNameRow}>
+            <Text style={extra.headerTitle}>
+              {pet
+                ? pet.name
+                : "Assistente Clyvo"}
+            </Text>
+
+            <View style={extra.aiBadge}>
+              <Ionicons
+                name="sparkles"
+                size={10}
+                color={Colors.white}
+              />
+
+              <Text style={extra.aiBadgeText}>
+                AI
+              </Text>
+            </View>
+          </View>
 
           <View style={extra.onlineWrapper}>
             <View style={extra.onlineDot} />
 
             <Text style={extra.onlineText}>
-              Assistente online
+              Clyvo online
             </Text>
           </View>
         </View>
 
-        {/* Menu rápido */}
         <TouchableOpacity
           style={extra.headerButton}
           onPress={() =>
@@ -418,22 +562,28 @@ export default function PetChatScreen() {
           <View style={extra.quickActionsHeader}>
             <View>
               <Text style={extra.quickActionsTitle}>
-                Ações rápidas
+                Central do Clyvo
               </Text>
 
-              <Text style={extra.quickActionsSubtitle}>
-                Acesse recursos do Clyvo
+              <Text
+                style={
+                  extra.quickActionsSubtitle
+                }
+              >
+                Ferramentas rápidas para cuidar do
+                seu pet
               </Text>
             </View>
 
             <TouchableOpacity
+              style={extra.panelCloseButton}
               onPress={() =>
                 setShowQuickActions(false)
               }
             >
               <Ionicons
                 name="close"
-                size={19}
+                size={18}
                 color={Colors.textSecondary}
               />
             </TouchableOpacity>
@@ -449,39 +599,255 @@ export default function PetChatScreen() {
                     acao.action,
                   )
                 }
-                activeOpacity={0.8}
+                activeOpacity={0.82}
               >
-                <View style={extra.quickActionIcon}>
+                <View
+                  style={extra.quickActionIcon}
+                >
                   <Ionicons
                     name={acao.icon}
-                    size={18}
+                    size={19}
                     color={Colors.accentLight}
                   />
                 </View>
 
-                <Text style={extra.quickActionTitle}>
+                <Text
+                  style={
+                    extra.quickActionTitle
+                  }
+                >
                   {acao.title}
                 </Text>
 
-                <Text style={extra.quickActionSubtitle}>
+                <Text
+                  style={
+                    extra.quickActionSubtitle
+                  }
+                >
                   {acao.subtitle}
                 </Text>
+
+                <Ionicons
+                  name="arrow-up-right"
+                  size={15}
+                  color={Colors.accentLight}
+                  style={
+                    extra.quickActionArrow
+                  }
+                />
               </TouchableOpacity>
             ))}
+
+            <TouchableOpacity
+              style={[
+                extra.quickActionCard,
+                extra.triageActionCard,
+              ]}
+              onPress={() =>
+                setShowTriage(true)
+              }
+              activeOpacity={0.82}
+            >
+              <View
+                style={extra.quickActionIcon}
+              >
+                <Ionicons
+                  name="pulse-outline"
+                  size={19}
+                  color={Colors.accentLight}
+                />
+              </View>
+
+              <Text
+                style={extra.quickActionTitle}
+              >
+                Triagem
+              </Text>
+
+              <Text
+                style={
+                  extra.quickActionSubtitle
+                }
+              >
+                Iniciar
+              </Text>
+
+              <Ionicons
+                name="arrow-up-right"
+                size={15}
+                color={Colors.accentLight}
+                style={
+                  extra.quickActionArrow
+                }
+              />
+            </TouchableOpacity>
           </View>
         </View>
       )}
 
       {/* =====================================================
-          ALERTA DE URGÊNCIA
+          TRIAGEM
+      ====================================================== */}
+
+      {showTriage && (
+        <Animated.View
+          style={[
+            extra.triagePanel,
+            {
+              opacity: triageAnimation,
+              transform: [
+                {
+                  translateY:
+                    triageAnimation.interpolate(
+                      {
+                        inputRange: [0, 1],
+                        outputRange: [
+                          -15,
+                          0,
+                        ],
+                      },
+                    ),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={extra.triageHeader}>
+            <View>
+              <View
+                style={extra.triageTitleRow}
+              >
+                <View
+                  style={extra.triagePulse}
+                >
+                  <Ionicons
+                    name="pulse"
+                    size={17}
+                    color={Colors.white}
+                  />
+                </View>
+
+                <Text
+                  style={extra.triageTitle}
+                >
+                  Modo Triagem
+                </Text>
+              </View>
+
+              <Text
+                style={extra.triageSubtitle}
+              >
+                O que está acontecendo com o pet?
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={extra.panelCloseButton}
+              onPress={() =>
+                setShowTriage(false)
+              }
+            >
+              <Ionicons
+                name="close"
+                size={18}
+                color={Colors.textSecondary}
+              />
+            </TouchableOpacity>
+          </View>
+
+          <View style={extra.triageGrid}>
+            <TouchableOpacity
+              style={extra.triageItem}
+              onPress={() =>
+                handleTriage("vomitando")
+              }
+            >
+              <Text
+                style={extra.triageEmoji}
+              >
+                🤢
+              </Text>
+
+              <Text
+                style={extra.triageItemText}
+              >
+                Vômito
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={extra.triageItem}
+              onPress={() =>
+                handleTriage(
+                  "com diarreia",
+                )
+              }
+            >
+              <Text
+                style={extra.triageEmoji}
+              >
+                💧
+              </Text>
+
+              <Text
+                style={extra.triageItemText}
+              >
+                Diarreia
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={extra.triageItem}
+              onPress={() =>
+                handleTriage(
+                  "sem querer comer",
+                )
+              }
+            >
+              <Text
+                style={extra.triageEmoji}
+              >
+                🍖
+              </Text>
+
+              <Text
+                style={extra.triageItemText}
+              >
+                Apetite
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={extra.triageItem}
+              onPress={() =>
+                handleTriage("com dor")
+              }
+            >
+              <Text
+                style={extra.triageEmoji}
+              >
+                🩹
+              </Text>
+
+              <Text
+                style={extra.triageItemText}
+              >
+                Dor
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* =====================================================
+          URGÊNCIA
       ====================================================== */}
 
       {urgente && lastResult && (
         <View
           style={[
             extra.banner,
-            lastResult.urgency ===
-            "emergencia"
+            emergencia
               ? extra.bannerCritico
               : extra.bannerAlerta,
           ]}
@@ -489,8 +855,7 @@ export default function PetChatScreen() {
           <View style={extra.bannerIcon}>
             <Ionicons
               name={
-                lastResult.urgency ===
-                "emergencia"
+                emergencia
                   ? "warning"
                   : "alert-circle"
               }
@@ -500,26 +865,42 @@ export default function PetChatScreen() {
           </View>
 
           <View style={extra.bannerContent}>
-            <Text style={extra.bannerTitle}>
-              {lastResult.urgency ===
-              "emergencia"
+            <Text
+              style={extra.bannerTitle}
+            >
+              {emergencia
                 ? "Atenção imediata"
                 : "Atenção recomendada"}
             </Text>
 
             <Text style={extra.bannerText}>
-              {lastResult.urgency ===
-              "emergencia"
-                ? "Procure atendimento veterinário agora."
-                : "Recomendado avaliar o pet em 24 a 48 horas."}
+              {emergencia
+                ? "O relato pode indicar uma situação que exige atendimento veterinário imediato."
+                : "Pode ser importante avaliar o pet nas próximas 24 a 48 horas."}
             </Text>
           </View>
 
-          <Ionicons
-            name="chevron-forward"
-            size={18}
-            color="rgba(255,255,255,0.75)"
-          />
+          <TouchableOpacity
+            style={extra.bannerAction}
+            onPress={() => {
+              Alert.alert(
+                "Atendimento veterinário",
+                "Procure uma clínica veterinária de confiança ou serviço de emergência da sua região.",
+                [
+                  {
+                    text: "OK",
+                    style: "default",
+                  },
+                ],
+              );
+            }}
+          >
+            <Ionicons
+              name="information-circle-outline"
+              size={19}
+              color={Colors.white}
+            />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -557,17 +938,52 @@ export default function PetChatScreen() {
                 },
               ]}
             >
-              <View style={extra.welcomeOrb}>
-                <View style={extra.welcomeOrbInner}>
+              <View style={extra.heroArea}>
+                <View style={extra.heroOrbitOne} />
+                <View style={extra.heroOrbitTwo} />
+
+                <View style={extra.heroAvatar}>
+                  {petImage ? (
+                    <Image
+                      source={{
+                        uri: petImage,
+                      }}
+                      style={extra.heroPetImage}
+                    />
+                  ) : (
+                    <Ionicons
+                      name="sparkles"
+                      size={34}
+                      color={
+                        Colors.accentLight
+                      }
+                    />
+                  )}
+                </View>
+
+                <View
+                  style={extra.heroSparkle}
+                >
                   <Ionicons
                     name="sparkles"
-                    size={31}
-                    color={Colors.accentLight}
+                    size={12}
+                    color={Colors.white}
                   />
                 </View>
 
-                <View style={extra.orbSmallOne} />
-                <View style={extra.orbSmallTwo} />
+                <View style={extra.heroOnline}>
+                  <View
+                    style={extra.heroOnlineDot}
+                  />
+
+                  <Text
+                    style={
+                      extra.heroOnlineText
+                    }
+                  >
+                    ONLINE
+                  </Text>
+                </View>
               </View>
 
               <Text style={extra.welcomeBadge}>
@@ -578,19 +994,79 @@ export default function PetChatScreen() {
                 Olá! Eu sou o Clyvo 👋
               </Text>
 
-              <Text style={extra.welcomeSubtitle}>
+              <Text
+                style={extra.welcomeSubtitle}
+              >
                 Seu assistente inteligente para
                 cuidar da saúde{" "}
                 {pet
                   ? `de ${pet.name}`
-                  : "do seu pet"}
-                .
+                  : "do seu pet"}{" "}
+                com mais praticidade.
               </Text>
+
+              <View style={extra.trustRow}>
+                <View style={extra.trustItem}>
+                  <Ionicons
+                    name="shield-checkmark"
+                    size={13}
+                    color="#35D07F"
+                  />
+
+                  <Text
+                    style={
+                      extra.trustText
+                    }
+                  >
+                    Histórico
+                  </Text>
+                </View>
+
+                <View style={extra.trustDivider} />
+
+                <View style={extra.trustItem}>
+                  <Ionicons
+                    name="flash"
+                    size={13}
+                    color={
+                      Colors.accentLight
+                    }
+                  />
+
+                  <Text
+                    style={
+                      extra.trustText
+                    }
+                  >
+                    Respostas rápidas
+                  </Text>
+                </View>
+
+                <View style={extra.trustDivider} />
+
+                <View style={extra.trustItem}>
+                  <Ionicons
+                    name="paw"
+                    size={13}
+                    color={
+                      Colors.accentLight
+                    }
+                  />
+
+                  <Text
+                    style={
+                      extra.trustText
+                    }
+                  >
+                    Pet care
+                  </Text>
+                </View>
+              </View>
 
               <View style={extra.welcomeInfo}>
                 <View style={extra.infoIcon}>
                   <Ionicons
-                    name="shield-checkmark-outline"
+                    name="sparkles-outline"
                     size={19}
                     color={
                       Colors.accentLight
@@ -598,30 +1074,87 @@ export default function PetChatScreen() {
                   />
                 </View>
 
-                <View style={extra.infoContent}>
-                  <Text style={extra.infoTitle}>
-                    Orientação personalizada
+                <View
+                  style={extra.infoContent}
+                >
+                  <Text
+                    style={extra.infoTitle}
+                  >
+                    Assistência inteligente
                   </Text>
 
-                  <Text style={extra.infoText}>
-                    O Clyvo pode analisar as
-                    informações disponíveis e
-                    ajudar você a entender melhor
-                    a situação do seu pet.
+                  <Text
+                    style={extra.infoText}
+                  >
+                    O Clyvo usa as informações
+                    disponíveis do seu pet como
+                    contexto da conversa.
                   </Text>
                 </View>
 
                 <View style={extra.infoStatus}>
-                  <View style={extra.infoStatusDot} />
+                  <View
+                    style={extra.infoStatusDot}
+                  />
                 </View>
               </View>
 
+              {/* TRIAGEM INICIAL */}
+              <TouchableOpacity
+                style={extra.triageLaunch}
+                onPress={() =>
+                  setShowTriage(true)
+                }
+                activeOpacity={0.82}
+              >
+                <View
+                  style={extra.triageLaunchIcon}
+                >
+                  <Ionicons
+                    name="pulse"
+                    size={20}
+                    color={Colors.white}
+                  />
+                </View>
+
+                <View
+                  style={extra.triageLaunchContent}
+                >
+                  <Text
+                    style={
+                      extra.triageLaunchTitle
+                    }
+                  >
+                    Iniciar uma triagem
+                  </Text>
+
+                  <Text
+                    style={
+                      extra.triageLaunchText
+                    }
+                  >
+                    Vamos entender os sintomas
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="chevron-forward"
+                  size={20}
+                  color={Colors.white}
+                />
+              </TouchableOpacity>
+
+              {/* SUGESTÕES */}
               {showSuggestions && (
                 <View
-                  style={extra.suggestionsContainer}
+                  style={
+                    extra.suggestionsContainer
+                  }
                 >
                   <View
-                    style={extra.suggestionsHeader}
+                    style={
+                      extra.suggestionsHeader
+                    }
                   >
                     <View>
                       <Text
@@ -637,7 +1170,7 @@ export default function PetChatScreen() {
                           extra.suggestionsSubtitle
                         }
                       >
-                        Toque em uma sugestão
+                        Perguntas rápidas para começar
                       </Text>
                     </View>
 
@@ -647,7 +1180,9 @@ export default function PetChatScreen() {
                           false,
                         )
                       }
-                      style={extra.closeSuggestion}
+                      style={
+                        extra.closeSuggestion
+                      }
                     >
                       <Ionicons
                         name="close"
@@ -660,7 +1195,10 @@ export default function PetChatScreen() {
                   </View>
 
                   {SUGESTOES.map(
-                    (sugestao, index) => (
+                    (
+                      sugestao,
+                      index,
+                    ) => (
                       <TouchableOpacity
                         key={sugestao.text}
                         style={[
@@ -681,7 +1219,9 @@ export default function PetChatScreen() {
                           }
                         >
                           <Ionicons
-                            name={sugestao.icon}
+                            name={
+                              sugestao.icon
+                            }
                             size={18}
                             color={
                               Colors.accentLight
@@ -726,48 +1266,14 @@ export default function PetChatScreen() {
             const isUser =
               msg.role === "user";
 
-            const messageAnimation =
-              new Animated.Value(0);
-
-            Animated.timing(
-              messageAnimation,
-              {
-                toValue: 1,
-                duration: 350,
-                delay: Math.min(index * 30, 180),
-                easing: Easing.out(
-                  Easing.cubic,
-                ),
-                useNativeDriver: true,
-              },
-            ).start();
-
             return (
-              <Animated.View
+              <View
                 key={index}
                 style={[
                   extra.messageRow,
                   isUser
                     ? extra.messageRowUser
                     : extra.messageRowAi,
-                  {
-                    opacity:
-                      messageAnimation,
-                    transform: [
-                      {
-                        translateY:
-                          messageAnimation.interpolate(
-                            {
-                              inputRange: [0, 1],
-                              outputRange: [
-                                12,
-                                0,
-                              ],
-                            },
-                          ),
-                      },
-                    ],
-                  },
                 ]}
               >
                 {!isUser && (
@@ -791,6 +1297,34 @@ export default function PetChatScreen() {
                   ]}
                 >
                   <View
+                    style={[
+                      extra.messageLabelRow,
+                      isUser &&
+                        extra.messageLabelRowUser,
+                    ]}
+                  >
+                    {!isUser && (
+                      <Text
+                        style={
+                          extra.messageLabel
+                        }
+                      >
+                        Clyvo AI
+                      </Text>
+                    )}
+
+                    {isUser && (
+                      <Text
+                        style={
+                          extra.messageLabelUser
+                        }
+                      >
+                        Você
+                      </Text>
+                    )}
+                  </View>
+
+                  <View
                     style={
                       isUser
                         ? extra.userBubble
@@ -807,6 +1341,94 @@ export default function PetChatScreen() {
                       {msg.content}
                     </Text>
                   </View>
+
+                  {/* AÇÕES DA RESPOSTA */}
+                  {!isUser && (
+                    <View
+                      style={
+                        extra.messageActions
+                      }
+                    >
+                      <TouchableOpacity
+                        style={
+                          extra.messageAction
+                        }
+                        onPress={() =>
+                          handleFeedback(
+                            index,
+                            "like",
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name={
+                            likedMessages[
+                              index
+                            ] === "like"
+                              ? "thumbs-up"
+                              : "thumbs-up-outline"
+                          }
+                          size={14}
+                          color={
+                            likedMessages[
+                              index
+                            ] === "like"
+                              ? Colors.accentLight
+                              : Colors.textSecondary
+                          }
+                        />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={
+                          extra.messageAction
+                        }
+                        onPress={() =>
+                          handleFeedback(
+                            index,
+                            "dislike",
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name={
+                            likedMessages[
+                              index
+                            ] === "dislike"
+                              ? "thumbs-down"
+                              : "thumbs-down-outline"
+                          }
+                          size={14}
+                          color={
+                            likedMessages[
+                              index
+                            ] === "dislike"
+                              ? Colors.accentLight
+                              : Colors.textSecondary
+                          }
+                        />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={
+                          extra.messageAction
+                        }
+                        onPress={() =>
+                          handleShare(
+                            msg.content,
+                          )
+                        }
+                      >
+                        <Ionicons
+                          name="share-outline"
+                          size={14}
+                          color={
+                            Colors.textSecondary
+                          }
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
 
                 {isUser && (
@@ -820,7 +1442,7 @@ export default function PetChatScreen() {
                     />
                   </View>
                 )}
-              </Animated.View>
+              </View>
             );
           })}
 
@@ -852,7 +1474,9 @@ export default function PetChatScreen() {
               </View>
 
               <View style={extra.ctaContent}>
-                <Text style={extra.ctaEyebrow}>
+                <Text
+                  style={extra.ctaEyebrow}
+                >
                   RECOMENDADO PELO CLYVO
                 </Text>
 
@@ -864,9 +1488,11 @@ export default function PetChatScreen() {
                 </Text>
 
                 <Text
-                  style={extra.ctaDescription}
+                  style={
+                    extra.ctaDescription
+                  }
                 >
-                  Toque para acessar
+                  Acesse diretamente este recurso
                 </Text>
               </View>
 
@@ -881,7 +1507,7 @@ export default function PetChatScreen() {
           )}
 
           {/* =================================================
-              TYPING
+              LOADING
           ================================================== */}
 
           {sending && (
@@ -894,10 +1520,10 @@ export default function PetChatScreen() {
                 />
               </View>
 
-              <View style={extra.typingBubble}>
-                <View
-                  style={extra.typingDots}
-                >
+              <View
+                style={extra.typingBubble}
+              >
+                <View style={extra.typingDots}>
                   <Animated.View
                     style={[
                       extra.typingDot,
@@ -968,8 +1594,10 @@ export default function PetChatScreen() {
                   />
                 </View>
 
-                <Text style={extra.typingText}>
-                  Clyvo está pensando...
+                <Text
+                  style={extra.typingText}
+                >
+                  Clyvo está analisando...
                 </Text>
               </View>
             </View>
@@ -977,7 +1605,7 @@ export default function PetChatScreen() {
         </ScrollView>
 
         {/* =================================================
-            SCROLL BUTTON
+            BOTÃO DE VOLTAR
         ================================================== */}
 
         {showScrollButton && (
@@ -996,7 +1624,7 @@ export default function PetChatScreen() {
       </View>
 
       {/* =====================================================
-          INPUT PREMIUM
+          INPUT
       ====================================================== */}
 
       <View style={extra.inputBar}>
@@ -1007,10 +1635,14 @@ export default function PetChatScreen() {
               (current) => !current,
             )
           }
-          activeOpacity={0.8}
+          activeOpacity={0.82}
         >
           <Ionicons
-            name="add"
+            name={
+              showQuickActions
+                ? "close"
+                : "add"
+            }
             size={22}
             color={Colors.accentLight}
           />
@@ -1092,7 +1724,7 @@ export default function PetChatScreen() {
 
 /*
 |--------------------------------------------------------------------------
-| ESTILOS CLYVO AI PREMIUM
+| CLYVO AI ULTRA
 |--------------------------------------------------------------------------
 */
 
@@ -1103,23 +1735,35 @@ const extra = StyleSheet.create({
 
   header: {
     backgroundColor: Colors.primary,
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     paddingTop:
       Platform.OS === "ios" ? 52 : 42,
-    paddingBottom: 14,
+    paddingBottom: 13,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
   },
 
-  headerTopGlow: {
+  headerGlowOne: {
     position: "absolute",
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    right: -50,
-    top: -120,
-    backgroundColor: "rgba(74,158,255,0.18)",
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    right: -55,
+    top: -118,
+    backgroundColor:
+      "rgba(74,158,255,0.18)",
+  },
+
+  headerGlowTwo: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    left: -75,
+    top: -100,
+    backgroundColor:
+      "rgba(74,158,255,0.08)",
   },
 
   headerButton: {
@@ -1133,13 +1777,13 @@ const extra = StyleSheet.create({
   },
 
   headerDeleteButton: {
-    marginLeft: 6,
+    marginLeft: 5,
   },
 
   avatarWrapper: {
     width: 46,
     height: 46,
-    marginLeft: 9,
+    marginLeft: 8,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1166,15 +1810,57 @@ const extra = StyleSheet.create({
       "rgba(255,255,255,0.35)",
   },
 
+  petImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+
+  headerOnlineDot: {
+    position: "absolute",
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    right: -1,
+    bottom: -1,
+    backgroundColor: "#35D07F",
+    borderWidth: 2,
+    borderColor: Colors.primary,
+  },
+
   headerInfo: {
     flex: 1,
-    marginLeft: 10,
+    marginLeft: 9,
+  },
+
+  headerNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
 
   headerTitle: {
     color: Colors.white,
     fontSize: 16,
     fontWeight: "800",
+  },
+
+  aiBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 7,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor:
+      "rgba(255,255,255,0.13)",
+  },
+
+  aiBadgeText: {
+    color: Colors.white,
+    fontSize: 8,
+    fontWeight: "900",
+    marginLeft: 2,
+    letterSpacing: 0.7,
   },
 
   onlineWrapper: {
@@ -1199,12 +1885,12 @@ const extra = StyleSheet.create({
   },
 
   /* =========================================================
-     AÇÕES RÁPIDAS
+     ACTIONS
   ========================================================= */
 
   quickActionsPanel: {
     backgroundColor: Colors.card,
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor:
@@ -1227,29 +1913,45 @@ const extra = StyleSheet.create({
   quickActionsSubtitle: {
     color: Colors.textSecondary,
     fontSize: 11,
-    marginTop: 2,
+    marginTop: 3,
+  },
+
+  panelCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor:
+      "rgba(0,0,0,0.035)",
   },
 
   quickActionsRow: {
     flexDirection: "row",
-    gap: 10,
+    gap: 8,
   },
 
   quickActionCard: {
     flex: 1,
-    minHeight: 92,
+    minHeight: 94,
     borderRadius: 16,
-    padding: 12,
+    padding: 11,
     backgroundColor:
-      "rgba(74,158,255,0.07)",
+      "rgba(74,158,255,0.065)",
     borderWidth: 1,
     borderColor:
       "rgba(74,158,255,0.14)",
+    position: "relative",
+  },
+
+  triageActionCard: {
+    backgroundColor:
+      "rgba(74,158,255,0.095)",
   },
 
   quickActionIcon: {
-    width: 32,
-    height: 32,
+    width: 33,
+    height: 33,
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -1270,14 +1972,137 @@ const extra = StyleSheet.create({
     marginTop: 2,
   },
 
+  quickActionArrow: {
+    position: "absolute",
+    right: 9,
+    top: 10,
+  },
+
   /* =========================================================
-     BANNER
+     TRIAGEM
+  ========================================================= */
+
+  triagePanel: {
+    backgroundColor: Colors.card,
+    paddingHorizontal: 13,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor:
+      "rgba(0,0,0,0.05)",
+  },
+
+  triageHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+
+  triageTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  triagePulse: {
+    width: 31,
+    height: 31,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor:
+      Colors.accentLight,
+  },
+
+  triageTitle: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: "800",
+    marginLeft: 8,
+  },
+
+  triageSubtitle: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    marginTop: 3,
+  },
+
+  triageGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+
+  triageItem: {
+    width: "48%",
+    minHeight: 64,
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor:
+      "rgba(74,158,255,0.06)",
+    borderWidth: 1,
+    borderColor:
+      "rgba(74,158,255,0.12)",
+  },
+
+  triageEmoji: {
+    fontSize: 21,
+  },
+
+  triageItemText: {
+    color: Colors.text,
+    fontSize: 12,
+    fontWeight: "700",
+    marginLeft: 8,
+  },
+
+  triageLaunch: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 18,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: Colors.primary,
+  },
+
+  triageLaunchIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor:
+      "rgba(255,255,255,0.12)",
+  },
+
+  triageLaunchContent: {
+    flex: 1,
+    marginLeft: 10,
+  },
+
+  triageLaunchTitle: {
+    color: Colors.white,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  triageLaunchText: {
+    color:
+      "rgba(255,255,255,0.68)",
+    fontSize: 10,
+    marginTop: 2,
+  },
+
+  /* =========================================================
+     ALERTA
   ========================================================= */
 
   banner: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     paddingVertical: 12,
   },
 
@@ -1290,9 +2115,9 @@ const extra = StyleSheet.create({
   },
 
   bannerIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+    width: 35,
+    height: 35,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor:
@@ -1313,10 +2138,20 @@ const extra = StyleSheet.create({
 
   bannerText: {
     color:
-      "rgba(255,255,255,0.82)",
-    fontSize: 12,
+      "rgba(255,255,255,0.84)",
+    fontSize: 11,
     marginTop: 2,
-    lineHeight: 17,
+    lineHeight: 16,
+  },
+
+  bannerAction: {
+    width: 31,
+    height: 31,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor:
+      "rgba(255,255,255,0.10)",
   },
 
   /* =========================================================
@@ -1333,90 +2168,169 @@ const extra = StyleSheet.create({
   },
 
   /* =========================================================
-     WELCOME
+     HERO
   ========================================================= */
 
   welcomeContainer: {
     alignItems: "center",
-    paddingTop: 30,
+    paddingTop: 22,
     paddingBottom: 20,
     paddingHorizontal: 4,
   },
 
-  welcomeOrb: {
-    width: 92,
-    height: 92,
+  heroArea: {
+    width: 130,
+    height: 115,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
-    marginBottom: 13,
   },
 
-  welcomeOrbInner: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+  heroAvatar: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: Colors.card,
     borderWidth: 1,
     borderColor:
       "rgba(74,158,255,0.24)",
-    elevation: 4,
+    elevation: 6,
     shadowColor: "#000",
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 5,
     },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
   },
 
-  orbSmallOne: {
+  heroPetImage: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+  },
+
+  heroOrbitOne: {
     position: "absolute",
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 105,
+    height: 105,
+    borderRadius: 53,
+    borderWidth: 1,
+    borderColor:
+      "rgba(74,158,255,0.15)",
+  },
+
+  heroOrbitTwo: {
+    position: "absolute",
+    width: 123,
+    height: 123,
+    borderRadius: 62,
+    borderWidth: 1,
+    borderColor:
+      "rgba(74,158,255,0.08)",
+  },
+
+  heroSparkle: {
+    position: "absolute",
+    right: 9,
+    top: 9,
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor:
       Colors.accentLight,
-    top: 2,
-    right: 18,
+    borderWidth: 2,
+    borderColor: Colors.card,
   },
 
-  orbSmallTwo: {
+  heroOnline: {
     position: "absolute",
-    width: 6,
-    height: 6,
+    bottom: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.primary,
+    borderWidth: 2,
+    borderColor: Colors.card,
+  },
+
+  heroOnlineDot: {
+    width: 5,
+    height: 5,
     borderRadius: 3,
-    backgroundColor:
-      Colors.accentLight,
-    bottom: 11,
-    left: 11,
+    backgroundColor: "#35D07F",
+    marginRight: 4,
+  },
+
+  heroOnlineText: {
+    color: Colors.white,
+    fontSize: 8,
+    fontWeight: "900",
+    letterSpacing: 0.8,
   },
 
   welcomeBadge: {
     color: Colors.accentLight,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "900",
-    letterSpacing: 2,
-    marginBottom: 5,
+    letterSpacing: 2.2,
+    marginBottom: 6,
   },
 
   welcomeTitle: {
     color: Colors.text,
-    fontSize: 23,
+    fontSize: 24,
     fontWeight: "800",
     textAlign: "center",
   },
 
   welcomeSubtitle: {
     color: Colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 20,
     textAlign: "center",
     marginTop: 8,
-    maxWidth: 340,
+    maxWidth: 350,
   },
+
+  trustRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 15,
+  },
+
+  trustItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  trustText: {
+    color: Colors.textSecondary,
+    fontSize: 9,
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+
+  trustDivider: {
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor:
+      Colors.textSecondary,
+    opacity: 0.35,
+    marginHorizontal: 9,
+  },
+
+  /* =========================================================
+     INFO
+  ========================================================= */
 
   welcomeInfo: {
     width: "100%",
@@ -1424,7 +2338,7 @@ const extra = StyleSheet.create({
     alignItems: "center",
     backgroundColor: Colors.card,
     borderRadius: 17,
-    marginTop: 23,
+    marginTop: 21,
     padding: 14,
     borderWidth: 1,
     borderColor:
@@ -1473,7 +2387,7 @@ const extra = StyleSheet.create({
     borderRadius: 7,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 8,
+    marginLeft: 7,
   },
 
   infoStatusDot: {
@@ -1489,7 +2403,7 @@ const extra = StyleSheet.create({
 
   suggestionsContainer: {
     width: "100%",
-    marginTop: 25,
+    marginTop: 24,
   },
 
   suggestionsHeader: {
@@ -1507,7 +2421,7 @@ const extra = StyleSheet.create({
 
   suggestionsSubtitle: {
     color: Colors.textSecondary,
-    fontSize: 11,
+    fontSize: 10,
     marginTop: 2,
   },
 
@@ -1575,7 +2489,7 @@ const extra = StyleSheet.create({
   messageRow: {
     width: "100%",
     flexDirection: "row",
-    marginBottom: 15,
+    marginBottom: 16,
     alignItems: "flex-end",
   },
 
@@ -1624,6 +2538,28 @@ const extra = StyleSheet.create({
     alignItems: "flex-start",
   },
 
+  messageLabelRow: {
+    marginLeft: 2,
+    marginBottom: 4,
+  },
+
+  messageLabelRowUser: {
+    alignItems: "flex-end",
+  },
+
+  messageLabel: {
+    color: Colors.accentLight,
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+
+  messageLabelUser: {
+    color: Colors.textSecondary,
+    fontSize: 9,
+    fontWeight: "700",
+  },
+
   userBubble: {
     backgroundColor: Colors.primary,
     paddingHorizontal: 15,
@@ -1669,6 +2605,22 @@ const extra = StyleSheet.create({
     color: Colors.text,
     fontSize: 14,
     lineHeight: 22,
+  },
+
+  messageActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+    marginLeft: 2,
+  },
+
+  messageAction: {
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 2,
   },
 
   /* =========================================================
@@ -1729,7 +2681,7 @@ const extra = StyleSheet.create({
 
   ctaDescription: {
     color: Colors.textSecondary,
-    fontSize: 11,
+    fontSize: 10,
     marginTop: 2,
   },
 
@@ -1744,7 +2696,7 @@ const extra = StyleSheet.create({
   },
 
   /* =========================================================
-     TYPING
+     DIGITANDO
   ========================================================= */
 
   typingRow: {
@@ -1792,10 +2744,10 @@ const extra = StyleSheet.create({
 
   scrollButton: {
     position: "absolute",
-    right: 17,
-    bottom: 18,
-    width: 41,
-    height: 41,
+    right: 16,
+    bottom: 17,
+    width: 42,
+    height: 42,
     borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
@@ -1818,7 +2770,7 @@ const extra = StyleSheet.create({
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
-    paddingHorizontal: 11,
+    paddingHorizontal: 10,
     paddingTop: 9,
     paddingBottom:
       Platform.OS === "ios" ? 20 : 11,
