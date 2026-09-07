@@ -2733,47 +2733,54 @@ const makeStyles = (theme: Theme) => {
     inputBar: {
       flexDirection: "row",
       alignItems: "flex-end",
-      paddingHorizontal: 10,
-      paddingTop: 9,
-      paddingBottom: Platform.OS === "ios" ? 20 : 11,
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: Platform.OS === "ios" ? 18 : 10,
       backgroundColor: c.card,
       borderTopWidth: 1,
-      borderTopColor: isDark ? c.border : overlay(0.05),
+      borderTopColor: isDark ? c.border : overlay(0.045),
     },
 
     plusButton: {
-      width: 42,
-      height: 48,
-      borderRadius: 16,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
       alignItems: "center",
       justifyContent: "center",
-      marginRight: 7,
-      backgroundColor: tint(0.09),
+      marginRight: 8,
+      marginBottom: 4,
+      backgroundColor: tint(0.08),
+      borderWidth: 1,
+      borderColor: tint(0.12),
     },
 
     inputContainer: {
       flex: 1,
-      minHeight: 48,
-      maxHeight: 115,
-      borderRadius: 17,
-      backgroundColor: c.background,
-      paddingHorizontal: 13,
-      paddingTop: 8,
-      paddingBottom: 5,
+      minHeight: 46,
+      maxHeight: 90,
+      borderRadius: 22,
+      backgroundColor: isDark
+        ? "rgba(255,255,255,0.045)"
+        : c.background,
+      paddingHorizontal: 15,
+      paddingTop: 9,
+      paddingBottom: 6,
       borderWidth: 1,
-      borderColor: isDark ? c.border : overlay(0.04),
+      borderColor: isDark
+        ? "rgba(255,255,255,0.09)"
+        : overlay(0.05),
     },
 
     input: {
       color: c.text,
       fontSize: 14,
       lineHeight: 20,
-      maxHeight: 75,
+      maxHeight: 58,
       padding: 0,
     },
 
     inputFooter: {
-      minHeight: 14,
+      height: 13,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "flex-end",
@@ -2782,29 +2789,32 @@ const makeStyles = (theme: Theme) => {
     },
 
     characterCount: {
-      fontSize: 9,
+      fontSize: 8,
       color: c.textSecondary,
+      opacity: 0.7,
     },
 
     sendButton: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
       alignItems: "center",
       justifyContent: "center",
       marginLeft: 8,
+      marginBottom: 3,
       backgroundColor: isDark ? c.accent : c.primary,
-      elevation: 5,
+      elevation: 4,
       shadowColor: "#000",
-      shadowOffset: { width: 0, height: 3 },
-      shadowOpacity: 0.18,
-      shadowRadius: 5,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.16,
+      shadowRadius: 4,
     },
 
     sendButtonDisabled: {
-      backgroundColor: isDark ? "#2A3852" : "#CBD3DC",
+      backgroundColor: isDark ? "#27354D" : "#D8DEE6",
       elevation: 0,
       shadowOpacity: 0,
     },
+
   });
 };
