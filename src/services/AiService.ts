@@ -40,7 +40,7 @@ export type PetRisk = {
 const BASE_URL =
   "https://projeto-challenge-conversacional.onrender.com";
 
-const TIMEOUT_MS = 45000;
+const TIMEOUT_MS = 90000;
 
 async function request<T>(
   path: string,

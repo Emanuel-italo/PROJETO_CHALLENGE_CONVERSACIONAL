@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 700
-    llm_timeout_seconds: float = 45.0
+    llm_timeout_seconds: float = 25.0
 
     # --- RAG ---
     # "chroma" usa ChromaDB persistente; "simple" usa retriever TF-IDF interno

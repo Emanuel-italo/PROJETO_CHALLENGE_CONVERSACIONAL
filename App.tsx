@@ -17,7 +17,7 @@ WebBrowser.maybeCompleteAuthSession();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, refetchOnWindowFocus: false },
-    mutations: { retry: 0 },
+    mutations: { retry: 1, retryDelay: 1500 },
   },
 });
 
