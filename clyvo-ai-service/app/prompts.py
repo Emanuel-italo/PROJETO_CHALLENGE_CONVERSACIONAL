@@ -93,7 +93,7 @@ def build_pet_context(
         f"Idade: {pet.age or 'não informada'}",
         f"Peso: {pet.weight or 'não informado'}",
         f"Cor: {pet.color or 'não informada'}",
-        f"Próximo check-up: {pet.next_checkup or 'não agendado'}",
+        f"Próximo check-up: {pet.nextCheckup or 'não agendado'}",
         "",
         "Carteira de vacinação:",
     ]
@@ -105,7 +105,7 @@ def build_pet_context(
             linhas.append(
                 f"- {vaccine.name}: {status}; "
                 f"aplicada em {vaccine.date or 'sem data'}; "
-                f"próximo reforço em {vaccine.next_due or 'sem data'}"
+                f"próximo reforço em {vaccine.nextDue or 'sem data'}"
             )
     else:
         linhas.append("- nenhuma vacina registrada no app")
@@ -120,8 +120,8 @@ def build_pet_context(
                 f"- {medication.name} "
                 f"{medication.dosage}, "
                 f"{medication.frequency}, "
-                f"de {medication.start_date or '?'} "
-                f"até {medication.end_date or 'sem previsão'} "
+                f"de {medication.startDate or '?'} "
+                f"até {medication.endDate or 'sem previsão'} "
                 f"(EM USO)"
             )
     else:
