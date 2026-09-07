@@ -7,37 +7,47 @@ payload enviado pelo React Native seja aceito sem transformação.
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # --------------------------------------------------------------------------- #
 # Domínio (espelho do app mobile)
 # --------------------------------------------------------------------------- #
+
 class Vaccine(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    
+
     id: str = ""
     name: str
     date: str = ""
-    next_due: str = Field(default="", alias="nextDue")
+    next_due: str = Field(
+        default="",
+        alias="nextDue",
+    )
     done: bool = False
 
 
 class Medication(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    
+
     id: str = ""
     name: str
     dosage: str = ""
     frequency: str = ""
-    start_date: str = Field(default="", alias="startDate")
-    end_date: str = Field(default="", alias="endDate")
+    start_date: str = Field(
+        default="",
+        alias="startDate",
+    )
+    end_date: str = Field(
+        default="",
+        alias="endDate",
+    )
     active: bool = True
 
 
 class Pet(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    
+
     id: str = ""
     name: str
     species: str = ""
@@ -45,11 +55,24 @@ class Pet(BaseModel):
     age: str = ""
     weight: str = ""
     color: str = ""
-    owner_id: str = Field(default="", alias="ownerId")
-    vaccines: list[Vaccine] = Field(default_factory=list)
-    medications: list[Medication] = Field(default_factory=list)
-    next_checkup: str = Field(default="", alias="nextCheckup")
-    created_at: str = Field(default="", alias="createdAt")
+    owner_id: str = Field(
+        default="",
+        alias="ownerId",
+    )
+    vaccines: list[Vaccine] = Field(
+        default_factory=list,
+    )
+    medications: list[Medication] = Field(
+        default_factory=list,
+    )
+    next_checkup: str = Field(
+        default="",
+        alias="nextCheckup",
+    )
+    created_at: str = Field(
+        default="",
+        alias="createdAt",
+    )
 
 
 class ChatMessage(BaseModel):
@@ -60,6 +83,7 @@ class ChatMessage(BaseModel):
 # --------------------------------------------------------------------------- #
 # Motor de regras
 # --------------------------------------------------------------------------- #
+
 class AlertSeverity(str, Enum):
     INFO = "info"
     ATENCAO = "atencao"
@@ -77,7 +101,11 @@ class Alert(BaseModel):
 class AlertsResponse(BaseModel):
     petId: str
     petName: str
-    riskScore: int = Field(ge=0, le=100, description="0 = sem risco, 100 = risco máximo")
+    riskScore: int = Field(
+        ge=0,
+        le=100,
+        description="0 = sem risco, 100 = risco máximo",
+    )
     riskLabel: Literal["baixo", "medio", "alto"]
     alerts: list[Alert]
 
@@ -85,6 +113,7 @@ class AlertsResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 # Chat
 # --------------------------------------------------------------------------- #
+
 class Urgency(str, Enum):
     BAIXA = "baixa"
     MEDIA = "media"
@@ -103,8 +132,14 @@ class SuggestedAction(str, Enum):
 class ChatRequest(BaseModel):
     pet: Pet | None = None
     petId: str | None = None
-    message: str = Field(min_length=1, max_length=2000)
-    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+    message: str = Field(
+        min_length=1,
+        max_length=2000,
+    )
+    history: list[ChatMessage] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
 
 class ChatResponse(BaseModel):
@@ -112,6 +147,10 @@ class ChatResponse(BaseModel):
     urgency: Urgency
     suggestedAction: SuggestedAction
     reason: str = ""
-    sources: list[str] = Field(default_factory=list)
-    alerts: list[Alert] = Field(default_factory=list)
+    sources: list[str] = Field(
+        default_factory=list,
+    )
+    alerts: list[Alert] = Field(
+        default_factory=list,
+    )
     simulated: bool = False
