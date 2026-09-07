@@ -7,7 +7,7 @@ from datetime import date
 from fastapi import APIRouter, Header, HTTPException, Response
 
 from ..config import settings
-from ..rpa import carteira, job, scheduler
+from .. import carteira, job, scheduler
 from ..schemas import RpaExecucao, RpaInscricaoRequest, RpaItem, RpaStatus
 
 router = APIRouter(prefix="/api/rpa", tags=["rpa"])
