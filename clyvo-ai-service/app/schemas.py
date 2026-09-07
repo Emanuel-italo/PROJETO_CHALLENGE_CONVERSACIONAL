@@ -1,3 +1,8 @@
+"""Contratos de entrada e saída da API.
+
+Os modelos de domínio espelham `src/types/index.ts` do app mobile, para que o
+payload enviado pelo React Native seja aceito sem transformação.
+"""
 
 from enum import Enum
 from typing import Annotated, Any, Callable, Literal
@@ -86,3 +91,101 @@ class Pet(BaseModel):
 class ChatMessage(BaseModel):
     role: Annotated[Literal["user", "assistant"], BeforeValidator(_as_role)] = "user"
     content: Str = ""
+
+
+# --------------------------------------------------------------------------- #
+# Motor de regras
+# --------------------------------------------------------------------------- #
+class AlertSeverity(str, Enum):
+    INFO = "info"
+    ATENCAO = "atencao"
+    CRITICO = "critico"
+
+
+class Alert(BaseModel):
+    code: str
+    severity: AlertSeverity
+    title: str
+    detail: str
+    dueDate: str | None = None
+
+
+class AlertsResponse(BaseModel):
+    petId: str
+    petName: str
+    riskScore: int = Field(ge=0, le=100, description="0 = sem risco, 100 = risco máximo")
+    riskLabel: Literal["baixo", "medio", "alto"]
+    alerts: list[Alert]
+
+
+# --------------------------------------------------------------------------- #
+# Chat
+# --------------------------------------------------------------------------- #
+class Urgency(str, Enum):
+    BAIXA = "baixa"
+    MEDIA = "media"
+    ALTA = "alta"
+    EMERGENCIA = "emergencia"
+
+
+class SuggestedAction(str, Enum):
+    NENHUMA = "nenhuma"
+    CUIDADO_EM_CASA = "cuidado_em_casa"
+    AGENDAR_CONSULTA = "agendar_consulta"
+    ATUALIZAR_VACINA = "atualizar_vacina"
+    PROCURAR_EMERGENCIA = "procurar_emergencia"
+
+
+class ChatRequest(BaseModel):
+    pet: Pet | None = None
+    petId: str | None = None
+    message: str = Field(min_length=1, max_length=2000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    urgency: Urgency
+    suggestedAction: SuggestedAction
+    reason: str = ""
+    sources: list[str] = Field(default_factory=list)
+    alerts: list[Alert] = Field(default_factory=list)
+    simulated: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# RPA de notificações
+# --------------------------------------------------------------------------- #
+class RpaInscricaoRequest(BaseModel):
+    pet: Pet
+    tutorNome: str = ""
+    tutorEmail: str
+
+
+class RpaItem(BaseModel):
+    petId: str
+    petName: str
+    destino: str
+    riskScore: int
+    alertas: list[str] = Field(default_factory=list)
+    status: str
+    detalhe: str = ""
+    assunto: str = ""
+
+
+class RpaExecucao(BaseModel):
+    data: str
+    total: int
+    enviados: int
+    ignorados: int
+    falhas: int
+    itens: list[RpaItem] = Field(default_factory=list)
+
+
+class RpaStatus(BaseModel):
+    enabled: bool
+    schedule: str
+    emailProvider: str
+    petsMonitorados: int
+    ultimaExecucao: str | None = None
+    ultimosEnvios: list[dict] = Field(default_factory=list)
