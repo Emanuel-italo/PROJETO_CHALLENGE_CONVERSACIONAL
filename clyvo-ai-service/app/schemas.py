@@ -7,13 +7,15 @@ payload enviado pelo React Native seja aceito sem transformação.
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # --------------------------------------------------------------------------- #
 # Domínio (espelho do app mobile)
 # --------------------------------------------------------------------------- #
 class Vaccine(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: str = ""
     name: str
     date: str = ""
@@ -22,6 +24,8 @@ class Vaccine(BaseModel):
 
 
 class Medication(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: str = ""
     name: str
     dosage: str = ""
@@ -32,6 +36,8 @@ class Medication(BaseModel):
 
 
 class Pet(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: str = ""
     name: str
     species: str = ""
@@ -44,10 +50,6 @@ class Pet(BaseModel):
     medications: list[Medication] = Field(default_factory=list)
     next_checkup: str = Field(default="", alias="nextCheckup")
     created_at: str = Field(default="", alias="createdAt")
-    
-    class Config:
-        populate_by_name = True
-        allow_population_by_field_name = True
 
 
 class ChatMessage(BaseModel):
