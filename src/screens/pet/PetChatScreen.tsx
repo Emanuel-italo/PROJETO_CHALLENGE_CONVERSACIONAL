@@ -134,13 +134,15 @@ export default function PetChatScreen() {
   const streamIndexRef = useRef(-1);
   const primeiraCargaRef = useRef(true);
 
-  const [input, setInput] = useState("");
-  const [showSuggestions, setShowSuggestions] = useState(true);
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  const [showQuickActions, setShowQuickActions] = useState(false);
-  const [showTriage, setShowTriage] = useState(false);
-  const [showPetPicker, setShowPetPicker] = useState(false);
+const [input, setInput] = useState("");
+const [inputFocused, setInputFocused] = useState(false);
+const [showSuggestions, setShowSuggestions] = useState(true);
+const [showScrollButton, setShowScrollButton] = useState(false);
+const [showQuickActions, setShowQuickActions] = useState(false);
+const [showTriage, setShowTriage] = useState(false);
+const [showPetPicker, setShowPetPicker] = useState(false);
   const [likedMessages, setLikedMessages] = useState<
+  
     Record<number, "like" | "dislike">
   >({});
 
@@ -1489,23 +1491,27 @@ export default function PetChatScreen() {
         </TouchableOpacity>
 
         <View style={s.inputContainer}>
-          <TextInput
-            style={s.input}
-            placeholder="Pergunte ao Clyvo..."
-            placeholderTextColor={c.textSecondary}
-            value={input}
-            onChangeText={setInput}
-            multiline
-            maxLength={1000}
-            returnKeyType="send"
-            blurOnSubmit={false}
-            onSubmitEditing={() => {
-              if (Platform.OS === "ios") {
-                return;
-              }
+<TextInput
+  style={s.input}
+  placeholder="Pergunte ao Clyvo..."
+  placeholderTextColor={c.textSecondary}
+  value={input}
+  onChangeText={setInput}
+  multiline
+  maxLength={1000}
+  returnKeyType="send"
+  blurOnSubmit={false}
+  onFocus={() => setInputFocused(true)}
+  onBlur={() => setInputFocused(false)}
+  onKeyPress={({ nativeEvent }) => {
+    if (nativeEvent.key === "Enter") {
+      handleSend();
+    }
+  }}
+  onSubmitEditing={() => {
+    handleSend();
+  }}
 
-              handleSend();
-            }}
           />
 
           <View style={s.inputFooter}>
@@ -2733,49 +2739,56 @@ const makeStyles = (theme: Theme) => {
     inputBar: {
       flexDirection: "row",
       alignItems: "flex-end",
-      paddingHorizontal: 12,
-      paddingTop: 8,
-      paddingBottom: Platform.OS === "ios" ? 18 : 10,
-      backgroundColor: c.card,
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: Platform.OS === "ios" ? 20 : 12,
+      backgroundColor: c.background,
       borderTopWidth: 1,
-      borderTopColor: isDark ? c.border : overlay(0.045),
+      borderTopColor: isDark ? "rgba(255,255,255,0.08)" : overlay(0.06),
     },
 
     plusButton: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
+      width: 44,
+      height: 44,
+      borderRadius: 12,
       alignItems: "center",
       justifyContent: "center",
       marginRight: 8,
-      marginBottom: 4,
-      backgroundColor: tint(0.08),
+      marginBottom: 2,
+      backgroundColor: isDark
+        ? "rgba(255,255,255,0.07)"
+        : tint(0.08),
       borderWidth: 1,
-      borderColor: tint(0.12),
+      borderColor: isDark
+        ? "rgba(255,255,255,0.10)"
+        : tint(0.12),
     },
 
     inputContainer: {
       flex: 1,
-      minHeight: 46,
-      maxHeight: 90,
-      borderRadius: 22,
-      backgroundColor: isDark
-        ? "rgba(255,255,255,0.045)"
-        : c.background,
-      paddingHorizontal: 15,
-      paddingTop: 9,
-      paddingBottom: 6,
+      minHeight: 48,
+      maxHeight: 94,
+      borderRadius: 8,
+      backgroundColor: c.card,
+      paddingHorizontal: 16,
+      paddingTop: 10,
+      paddingBottom: 7,
       borderWidth: 1,
       borderColor: isDark
-        ? "rgba(255,255,255,0.09)"
-        : overlay(0.05),
+        ? "rgba(255,255,255,0.40)"
+        : overlay(0.07),
+      elevation: 2,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0.20 : 0.06,
+      shadowRadius: 6,
     },
 
     input: {
       color: c.text,
-      fontSize: 14,
-      lineHeight: 20,
-      maxHeight: 58,
+      fontSize: 15,
+      lineHeight: 21,
+      maxHeight: 60,
       padding: 0,
     },
 
@@ -2785,36 +2798,36 @@ const makeStyles = (theme: Theme) => {
       alignItems: "center",
       justifyContent: "flex-end",
       gap: 6,
-      marginTop: 2,
+      marginTop: 3,
     },
 
     characterCount: {
       fontSize: 8,
       color: c.textSecondary,
-      opacity: 0.7,
+      opacity: 0.55,
     },
 
     sendButton: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
       alignItems: "center",
       justifyContent: "center",
       marginLeft: 8,
-      marginBottom: 3,
+      marginBottom: 2,
       backgroundColor: isDark ? c.accent : c.primary,
-      elevation: 4,
+      elevation: 5,
       shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.16,
-      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.18,
+      shadowRadius: 5,
     },
 
     sendButtonDisabled: {
-      backgroundColor: isDark ? "#27354D" : "#D8DEE6",
+      backgroundColor: isDark ? "#283750" : "#D9DEE6",
       elevation: 0,
       shadowOpacity: 0,
     },
-
   });
+
 };
