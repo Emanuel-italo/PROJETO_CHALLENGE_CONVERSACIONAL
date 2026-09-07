@@ -1,11 +1,13 @@
 // theme.ts
 //
-// Paletas clara e escura + hook de tema.
+// Paletas clara e escura + tema orientado a contexto.
 //
-// A paleta clara é exatamente a de `colors.ts`, então nada muda visualmente no
-// modo claro. A escura reaproveita os mesmos tokens, o que permite trocar
-// `Colors.x` por `colors.x` em qualquer tela sem redesenhar nada.
+// `useTheme()` continua com a MESMA assinatura de antes, então nenhuma tela
+// precisa ser alterada. A diferença é a FONTE do tema:
+//   - com <ThemeProvider> na árvore, o tema vem do contexto (toggle manual);
+//   - sem ele, cai no esquema do sistema operacional (comportamento antigo).
 
+import { createContext, useContext } from "react";
 import { useColorScheme } from "react-native";
 
 export const LightColors = {
@@ -26,6 +28,8 @@ export const LightColors = {
   border: "#E2E8F0",
 };
 
+// Escuro suavizado. Se preferir o escuro anterior, troque background/card/border
+// pelos valores antigos (#070D18 / #111B2C / #22304A).
 export const DarkColors: typeof LightColors = {
   primary: "#0A1628",
   secondary: "#1E3A5F",
@@ -36,12 +40,12 @@ export const DarkColors: typeof LightColors = {
   accentRed: "#FF6B5E",
   white: "#FFFFFF",
   black: "#000000",
-  background: "#070D18",
-  card: "#111B2C",
+  background: "#0C1424",
+  card: "#16223A",
   text: "#E8EEF6",
   textSecondary: "#93A3B8",
   textLight: "#61748C",
-  border: "#22304A",
+  border: "#263651",
 };
 
 export type ThemeColors = typeof LightColors;
@@ -49,16 +53,11 @@ export type ThemeColors = typeof LightColors;
 export type Theme = {
   colors: ThemeColors;
   isDark: boolean;
-  /** Sobreposição sutil: divisórias, fundos de botão, bordas de card. */
   overlay: (opacity: number) => string;
-  /** Tinta da cor de destaque, usada nos cards e ícones. */
   tint: (opacity: number) => string;
 };
 
-export function useTheme(): Theme {
-  const scheme = useColorScheme();
-  const isDark = scheme === "dark";
-
+export function buildTheme(isDark: boolean): Theme {
   return {
     colors: isDark ? DarkColors : LightColors,
     isDark,
@@ -67,4 +66,34 @@ export function useTheme(): Theme {
     tint: (opacity: number) =>
       isDark ? `rgba(90,169,255,${opacity})` : `rgba(74,158,255,${opacity})`,
   };
+}
+
+export type ThemeMode = "light" | "dark";
+
+export type ThemeContextValue = {
+  theme: Theme;
+  mode: ThemeMode;
+  toggle: () => void;
+  setMode: (mode: ThemeMode) => void;
+};
+
+export const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+export function useTheme(): Theme {
+  const ctx = useContext(ThemeContext);
+  const scheme = useColorScheme(); // sempre chamado (regras dos hooks)
+
+  return ctx ? ctx.theme : buildTheme(scheme === "dark");
+}
+
+export function useThemeControls(): ThemeContextValue {
+  const ctx = useContext(ThemeContext);
+
+  if (!ctx) {
+    throw new Error(
+      "useThemeControls precisa de <ThemeProvider> acima na árvore de componentes.",
+    );
+  }
+
+  return ctx;
 }

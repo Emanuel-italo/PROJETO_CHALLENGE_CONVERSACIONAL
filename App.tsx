@@ -7,13 +7,11 @@ import * as WebBrowser from "expo-web-browser";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AuthProvider } from "./src/contexts/AuthContext";
+import { ThemeProvider } from "./src/contexts/ThemeContext";
 import RootNavigator from "./src/navigation/RootNavigator";
 
-// Necessário para o fluxo de login com Google (expo-auth-session) fechar
-// corretamente a aba/janela de autenticação ao redirecionar de volta ao app.
 WebBrowser.maybeCompleteAuthSession();
 
-// Cliente do TanStack Query: exigido pelos hooks useAiChat e usePetRisk.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, refetchOnWindowFocus: false },
@@ -27,12 +25,14 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider>
-        <AuthProvider>
-          <NavigationContainer>
-            <StatusBar style="light" />
-            <RootNavigator />
-          </NavigationContainer>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <NavigationContainer>
+              <StatusBar style="auto" />
+              <RootNavigator />
+            </NavigationContainer>
+          </AuthProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </QueryClientProvider>
   );

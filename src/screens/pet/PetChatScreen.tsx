@@ -24,12 +24,12 @@ import {
   Platform,
   ActivityIndicator,
   StyleSheet,
-  Alert,
   Keyboard,
   Animated,
   Easing,
   Image,
   Share,
+  Alert,
 } from "react-native";
 
 import { useNavigation } from "@react-navigation/native";
@@ -42,7 +42,12 @@ import { usePets } from "../../hooks/usePets";
 import { useAiChat } from "../../hooks/useAiChat";
 import { usePetRisk } from "../../hooks/usePetRisk";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
-import { Theme, useTheme } from "../../styles/theme";
+import {
+  DarkColors,
+  LightColors,
+  Theme,
+  useTheme,
+} from "../../styles/theme";
 import RichText from "../../components/RichText";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -74,9 +79,32 @@ const ACOES_RAPIDAS = [
 export default function PetChatScreen() {
   const navigation = useNavigation<Nav>();
 
-  const theme = useTheme();
+  const systemTheme = useTheme();
+  const [darkMode, setDarkMode] = useState<boolean>(systemTheme.isDark);
+
+  const theme = useMemo<Theme>(() => {
+    const isDark = darkMode;
+
+    return {
+      colors: isDark ? DarkColors : LightColors,
+      isDark,
+      overlay: (opacity: number) =>
+        isDark
+          ? `rgba(255,255,255,${opacity})`
+          : `rgba(0,0,0,${opacity})`,
+      tint: (opacity: number) =>
+        isDark
+          ? `rgba(90,169,255,${opacity})`
+          : `rgba(74,158,255,${opacity})`,
+    };
+  }, [darkMode]);
+
   const c = theme.colors;
   const s = useMemo(() => makeStyles(theme), [theme]);
+
+  const toggleTheme = () => {
+    setDarkMode((current) => !current);
+  };
 
   /* =========================================================
      PET SELECIONADO
@@ -603,11 +631,27 @@ export default function PetChatScreen() {
 
         <TouchableOpacity
           style={s.headerButton}
+          onPress={toggleTheme}
+          activeOpacity={0.7}
+          accessibilityLabel={
+            theme.isDark ? "Ativar tema claro" : "Ativar tema escuro"
+          }
+        >
+          <Ionicons
+            name={theme.isDark ? "sunny-outline" : "moon-outline"}
+            size={19}
+            color={c.white}
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[s.headerButton, s.headerOptionsButton]}
           onPress={() => {
             setShowQuickActions((current) => !current);
             setShowPetPicker(false);
           }}
           activeOpacity={0.7}
+          accessibilityLabel="Abrir ações rápidas"
         >
           <Ionicons name="options-outline" size={20} color={c.white} />
         </TouchableOpacity>
@@ -616,6 +660,7 @@ export default function PetChatScreen() {
           style={[s.headerButton, s.headerDeleteButton]}
           onPress={handleClearChat}
           activeOpacity={0.7}
+          accessibilityLabel="Limpar conversa"
         >
           <Ionicons name="trash-outline" size={18} color={c.white} />
         </TouchableOpacity>
@@ -724,7 +769,7 @@ export default function PetChatScreen() {
                 <Text style={s.quickActionSubtitle}>{acao.subtitle}</Text>
 
                 <Ionicons
-                  name="arrow-up-right"
+                  name="chevron-forward"
                   size={15}
                   color={c.accentLight}
                   style={s.quickActionArrow}
@@ -750,7 +795,7 @@ export default function PetChatScreen() {
               <Text style={s.quickActionSubtitle}>Iniciar</Text>
 
               <Ionicons
-                name="arrow-up-right"
+                name="chevron-forward"
                 size={15}
                 color={c.accentLight}
                 style={s.quickActionArrow}
@@ -1126,9 +1171,8 @@ export default function PetChatScreen() {
                             style={[
                               s.triageTag,
                               {
-                                backgroundColor: `${
-                                  urgencyMeta(lastResult.urgency).cor
-                                }1A`,
+                                backgroundColor: `${urgencyMeta(lastResult.urgency).cor
+                                  }1A`,
                                 borderColor: urgencyMeta(lastResult.urgency).cor,
                               },
                             ]}
@@ -1565,6 +1609,10 @@ const makeStyles = (theme: Theme) => {
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: "rgba(255,255,255,0.09)",
+    },
+
+    headerOptionsButton: {
+      marginLeft: 5,
     },
 
     headerDeleteButton: {
