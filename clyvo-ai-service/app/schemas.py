@@ -52,23 +52,32 @@ class Pet(BaseModel):
     name: str
     species: str = ""
     breed: str = ""
-    age: str = ""
-    weight: str = ""
+
+    # O aplicativo envia esses campos como números.
+    # Mantemos compatibilidade com dados antigos que possam estar como texto.
+    age: int | float | str = ""
+    weight: int | float | str = ""
+
     color: str = ""
+
     owner_id: str = Field(
         default="",
         alias="ownerId",
     )
+
     vaccines: list[Vaccine] = Field(
         default_factory=list,
     )
+
     medications: list[Medication] = Field(
         default_factory=list,
     )
+
     next_checkup: str = Field(
         default="",
         alias="nextCheckup",
     )
+
     created_at: str = Field(
         default="",
         alias="createdAt",
@@ -132,10 +141,12 @@ class SuggestedAction(str, Enum):
 class ChatRequest(BaseModel):
     pet: Pet | None = None
     petId: str | None = None
+
     message: str = Field(
         min_length=1,
         max_length=2000,
     )
+
     history: list[ChatMessage] = Field(
         default_factory=list,
         max_length=20,
