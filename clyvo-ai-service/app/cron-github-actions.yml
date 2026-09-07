@@ -1,0 +1,30 @@
+# Cron externo para o RPA — alternativa ao agendador interno.
+#
+# No plano gratuito do Render o serviço hiberna após ~15 minutos ociosos, e um
+# processo dormindo não dispara nada. Este workflow acorda o serviço e executa
+# a rotina todo dia, sem custo.
+#
+# Instalação: mova este arquivo para .github/workflows/rpa-diario.yml na raiz
+# do repositório e cadastre os secrets RPA_URL e RPA_TOKEN em
+# Settings > Secrets and variables > Actions.
+
+name: RPA diário Clyvo
+
+on:
+  schedule:
+    - cron: "0 12 * * *"   # 12:00 UTC = 09:00 em Brasília
+  workflow_dispatch:        # permite disparar manualmente pelo site do GitHub
+
+jobs:
+  notificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Acordar o serviço
+        run: curl -s --max-time 90 "${{ secrets.RPA_URL }}/health" || true
+
+      - name: Executar a rotina de notificações
+        run: |
+          curl -s -X POST "${{ secrets.RPA_URL }}/api/rpa/run" \
+            -H "X-RPA-Token: ${{ secrets.RPA_TOKEN }}" \
+            --max-time 120 \
+            --fail-with-body

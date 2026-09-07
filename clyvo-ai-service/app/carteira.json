@@ -1,0 +1,111 @@
+[
+  {
+    "tutorNome": "Emanuel",
+    "tutorEmail": "emanuelitaloleal@hotmail.com",
+    "pet": {
+      "id": "pet-nina",
+      "name": "Nina",
+      "species": "Cachorro",
+      "breed": "Golden Retriever",
+      "age": "9 anos",
+      "weight": "30kg",
+      "color": "dourado",
+      "ownerId": "tutor-emanuel",
+      "vaccines": [
+        {
+          "id": "v1",
+          "name": "Antirrábica",
+          "date": "2025-07-29",
+          "nextDue": "2026-07-29",
+          "done": true
+        },
+        {
+          "id": "v2",
+          "name": "V10",
+          "date": "2026-02-19",
+          "nextDue": "2027-02-19",
+          "done": true
+        }
+      ],
+      "medications": [
+        {
+          "id": "m1",
+          "name": "Meloxicam",
+          "dosage": "0,1 mg/kg",
+          "frequency": "1x ao dia",
+          "startDate": "2026-08-26",
+          "endDate": "2026-09-09",
+          "active": true
+        }
+      ],
+      "nextCheckup": "2026-08-23",
+      "createdAt": "2025-04-25"
+    }
+  },
+  {
+    "tutorNome": "Emanuel",
+    "tutorEmail": "emanuelitaloleal@hotmail.com",
+    "pet": {
+      "id": "pet-thor",
+      "name": "Thor",
+      "species": "Gato",
+      "breed": "Siamês",
+      "age": "4 anos",
+      "weight": "5kg",
+      "color": "cinza",
+      "ownerId": "tutor-emanuel",
+      "vaccines": [
+        {
+          "id": "v3",
+          "name": "V4 Felina",
+          "date": "2025-09-22",
+          "nextDue": "2026-09-19",
+          "done": true
+        },
+        {
+          "id": "v4",
+          "name": "Antirrábica",
+          "date": "2025-09-22",
+          "nextDue": "2026-09-27",
+          "done": true
+        }
+      ],
+      "medications": [],
+      "nextCheckup": "2026-10-02",
+      "createdAt": "2025-08-03"
+    }
+  },
+  {
+    "tutorNome": "Emanuel",
+    "tutorEmail": "emanuelitaloleal@hotmail.com",
+    "pet": {
+      "id": "pet-luna",
+      "name": "Luna",
+      "species": "Cachorro",
+      "breed": "Border Collie",
+      "age": "2 anos",
+      "weight": "18kg",
+      "color": "preto e branco",
+      "ownerId": "tutor-emanuel",
+      "vaccines": [
+        {
+          "id": "v5",
+          "name": "V10",
+          "date": "2025-11-11",
+          "nextDue": "2026-11-06",
+          "done": true
+        },
+        {
+          "id": "v6",
+          "name": "Antirrábica",
+          "date": "2025-11-11",
+          "nextDue": "2026-11-11",
+          "done": true
+        }
+      ],
+      "medications": [],
+      "nextCheckup": "2026-12-06",
+      "createdAt": "2025-10-22"
+    }
+  }
+]

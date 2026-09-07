@@ -40,6 +40,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { RootStackParamList } from "../../types";
 import { usePets } from "../../hooks/usePets";
 import { useAiChat } from "../../hooks/useAiChat";
+import { usePetRisk } from "../../hooks/usePetRisk";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
 import { Theme, useTheme } from "../../styles/theme";
 import RichText from "../../components/RichText";
@@ -96,6 +97,14 @@ export default function PetChatScreen() {
   }, [pets, selectedPetId]);
 
   const { messages, sending, lastResult, send, reset } = useAiChat(pet);
+
+  // Score de risco do pet, vindo do motor de regras do backend.
+  const { data: risk } = usePetRisk(pet);
+
+  // Texto da última resposta sendo revelado caractere a caractere.
+  const [streamedText, setStreamedText] = useState("");
+  const streamIndexRef = useRef(-1);
+  const primeiraCargaRef = useRef(true);
 
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -219,13 +228,65 @@ export default function PetChatScreen() {
     }).start();
   }, [showTriage]);
 
+  // Revela a resposta da IA progressivamente, como um produto de verdade.
+  // Mensagens já existentes no histórico não são reanimadas.
+  useEffect(() => {
+    const ultima = messages[messages.length - 1];
+
+    if (!ultima || ultima.role !== "assistant") {
+      return;
+    }
+
+    const indice = messages.length - 1;
+
+    if (primeiraCargaRef.current) {
+      primeiraCargaRef.current = false;
+      streamIndexRef.current = indice;
+      setStreamedText(ultima.content);
+      return;
+    }
+
+    if (streamIndexRef.current === indice) {
+      return;
+    }
+
+    streamIndexRef.current = indice;
+    setStreamedText("");
+
+    let posicao = 0;
+    const total = ultima.content.length;
+
+    const timer = setInterval(() => {
+      posicao = Math.min(total, posicao + 3);
+      setStreamedText(ultima.content.slice(0, posicao));
+
+      if (posicao >= total) {
+        clearInterval(timer);
+      }
+    }, 16);
+
+    return () => clearInterval(timer);
+  }, [messages]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
     }, 120);
 
     return () => clearTimeout(timer);
-  }, [messages.length, sending]);
+  }, [messages.length, sending, streamedText]);
+
+  // Barra de risco animada no header.
+  const riskAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(riskAnim, {
+      toValue: risk?.riskScore ?? 0,
+      duration: 900,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [risk?.riskScore]);
 
   /* =========================================================
      ENVIO
@@ -272,6 +333,8 @@ export default function PetChatScreen() {
             setShowQuickActions(false);
             setShowTriage(false);
             setLikedMessages({});
+            setStreamedText("");
+            streamIndexRef.current = -1;
 
             setTimeout(() => {
               scrollRef.current?.scrollTo({ y: 0, animated: true });
@@ -369,6 +432,30 @@ export default function PetChatScreen() {
   /* =========================================================
      ALERTAS DO PRONTUÁRIO
   ========================================================= */
+
+  const urgencyMeta = (urgency?: string) => {
+    if (urgency === "emergencia") {
+      return { cor: c.accentRed, rotulo: "EMERGÊNCIA", icone: "warning" as const };
+    }
+    if (urgency === "alta") {
+      return { cor: c.accentOrange, rotulo: "URGENTE", icone: "alert-circle" as const };
+    }
+    if (urgency === "media") {
+      return { cor: c.accentLight, rotulo: "AVALIAR", icone: "time-outline" as const };
+    }
+    return {
+      cor: c.accentGreen,
+      rotulo: "ROTINA",
+      icone: "checkmark-circle-outline" as const,
+    };
+  };
+
+  const riskCor =
+    (risk?.riskScore ?? 0) >= 60
+      ? c.accentRed
+      : (risk?.riskScore ?? 0) >= 30
+        ? c.accentOrange
+        : c.accentGreen;
 
   const alertColor = (severity: AiAlert["severity"]) => {
     if (severity === "critico") return c.accentRed;
@@ -487,6 +574,31 @@ export default function PetChatScreen() {
               {pets.length > 1 ? "Toque para trocar de pet" : "Clyvo online"}
             </Text>
           </View>
+
+          {/* Score de risco do pet, sempre visível */}
+          {risk && (
+            <View style={s.riskWrapper}>
+              <View style={s.riskTrack}>
+                <Animated.View
+                  style={[
+                    s.riskFill,
+                    {
+                      backgroundColor: riskCor,
+                      width: riskAnim.interpolate({
+                        inputRange: [0, 100],
+                        outputRange: ["0%", "100%"],
+                        extrapolate: "clamp",
+                      }),
+                    },
+                  ]}
+                />
+              </View>
+
+              <Text style={[s.riskLabel, { color: riskCor }]}>
+                risco {risk.riskLabel}
+              </Text>
+            </View>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -1007,12 +1119,54 @@ export default function PetChatScreen() {
                     {isUser ? (
                       <Text style={s.userText}>{msg.content}</Text>
                     ) : (
-                      <RichText
-                        content={msg.content}
-                        style={s.aiText}
-                        accentColor={c.accentLight}
-                        codeBackground={theme.tint(0.12)}
-                      />
+                      <>
+                        {/* Cabeçalho de triagem: a classificação vira parte da resposta */}
+                        {index === messages.length - 1 && lastResult && (
+                          <View
+                            style={[
+                              s.triageTag,
+                              {
+                                backgroundColor: `${
+                                  urgencyMeta(lastResult.urgency).cor
+                                }1A`,
+                                borderColor: urgencyMeta(lastResult.urgency).cor,
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name={urgencyMeta(lastResult.urgency).icone}
+                              size={12}
+                              color={urgencyMeta(lastResult.urgency).cor}
+                            />
+
+                            <Text
+                              style={[
+                                s.triageTagText,
+                                { color: urgencyMeta(lastResult.urgency).cor },
+                              ]}
+                            >
+                              {urgencyMeta(lastResult.urgency).rotulo}
+                            </Text>
+                          </View>
+                        )}
+
+                        <RichText
+                          content={
+                            index === streamIndexRef.current
+                              ? streamedText || msg.content
+                              : msg.content
+                          }
+                          style={s.aiText}
+                          accentColor={c.accentLight}
+                          codeBackground={theme.tint(0.12)}
+                        />
+
+                        {/* Cursor piscando enquanto o texto é revelado */}
+                        {index === streamIndexRef.current &&
+                          streamedText.length < msg.content.length && (
+                            <View style={s.cursor} />
+                          )}
+                      </>
                     )}
                   </View>
 
@@ -1083,6 +1237,25 @@ export default function PetChatScreen() {
           {/* =================================================
               ALERTAS DO PRONTUÁRIO
           ================================================== */}
+
+          {/* De onde a IA tirou a informação */}
+          {!sending && ultimaEhDaIa && (lastResult?.sources?.length ?? 0) > 0 && (
+            <View style={s.sourcesRow}>
+              <Ionicons
+                name="library-outline"
+                size={12}
+                color={c.textSecondary}
+              />
+
+              {(lastResult?.sources ?? []).slice(0, 3).map((fonte) => (
+                <View key={fonte} style={s.sourceChip}>
+                  <Text style={s.sourceChipText} numberOfLines={1}>
+                    {fonte.split("—").pop()?.trim() ?? fonte}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {mostrarAlertas && (
             <View style={s.alertsBlock}>
@@ -1168,49 +1341,72 @@ export default function PetChatScreen() {
                 <Ionicons name="sparkles" size={14} color={c.white} />
               </View>
 
-              <View style={s.typingBubble}>
-                <View style={s.typingDots}>
-                  <Animated.View
-                    style={[
-                      s.typingDot,
-                      {
-                        opacity: typingAnimation.interpolate({
-                          inputRange: [0, 0.5, 1],
-                          outputRange: [0.35, 1, 0.35],
-                        }),
-                      },
-                    ]}
-                  />
+              <View style={s.skeletonBubble}>
+                <View style={s.skeletonHeader}>
+                  <View style={s.typingDots}>
+                    <Animated.View
+                      style={[
+                        s.typingDot,
+                        {
+                          opacity: typingAnimation.interpolate({
+                            inputRange: [0, 0.5, 1],
+                            outputRange: [0.35, 1, 0.35],
+                          }),
+                        },
+                      ]}
+                    />
 
-                  <Animated.View
-                    style={[
-                      s.typingDot,
-                      {
-                        opacity: typingAnimation.interpolate({
-                          inputRange: [0, 0.5, 1],
-                          outputRange: [1, 0.35, 1],
-                        }),
-                      },
-                    ]}
-                  />
+                    <Animated.View
+                      style={[
+                        s.typingDot,
+                        {
+                          opacity: typingAnimation.interpolate({
+                            inputRange: [0, 0.5, 1],
+                            outputRange: [1, 0.35, 1],
+                          }),
+                        },
+                      ]}
+                    />
 
-                  <Animated.View
-                    style={[
-                      s.typingDot,
-                      {
-                        opacity: typingAnimation.interpolate({
-                          inputRange: [0, 0.5, 1],
-                          outputRange: [0.35, 1, 0.35],
-                        }),
-                      },
-                    ]}
-                  />
+                    <Animated.View
+                      style={[
+                        s.typingDot,
+                        {
+                          opacity: typingAnimation.interpolate({
+                            inputRange: [0, 0.5, 1],
+                            outputRange: [0.35, 1, 0.35],
+                          }),
+                        },
+                      ]}
+                    />
+                  </View>
+
+                  <Text style={s.typingText}>
+                    Consultando o histórico do pet...
+                  </Text>
                 </View>
 
-                <Text style={s.typingText}>Clyvo está analisando...</Text>
+                {/* Esqueleto do texto que está por vir */}
+                {[0.92, 0.78, 0.55].map((largura, indice) => (
+                  <Animated.View
+                    key={indice}
+                    style={[
+                      s.skeletonLine,
+                      {
+                        width: `${largura * 100}%`,
+                        opacity: typingAnimation.interpolate({
+                          inputRange: [0, 0.5, 1],
+                          outputRange:
+                            indice % 2 === 0 ? [0.25, 0.6, 0.25] : [0.6, 0.25, 0.6],
+                        }),
+                      },
+                    ]}
+                  />
+                ))}
               </View>
             </View>
           )}
+
         </ScrollView>
 
         {/* =================================================
@@ -1477,6 +1673,35 @@ const makeStyles = (theme: Theme) => {
       color: "rgba(255,255,255,0.68)",
       fontSize: 11,
       fontWeight: "500",
+    },
+
+    /* ===================== BARRA DE RISCO ===================== */
+
+    riskWrapper: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginTop: 6,
+    },
+
+    riskTrack: {
+      flex: 1,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: "rgba(255,255,255,0.16)",
+      overflow: "hidden",
+      maxWidth: 120,
+    },
+
+    riskFill: {
+      height: 4,
+      borderRadius: 2,
+    },
+
+    riskLabel: {
+      fontSize: 9,
+      fontWeight: "800",
+      marginLeft: 7,
+      letterSpacing: 0.3,
     },
 
     /* ===================== PAINÉIS ===================== */
@@ -2199,6 +2424,91 @@ const makeStyles = (theme: Theme) => {
       alignItems: "center",
       justifyContent: "center",
       marginRight: 2,
+    },
+
+    /* ===================== TRIAGEM NA BOLHA ===================== */
+
+    triageTag: {
+      alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 8,
+      borderWidth: 1,
+      marginBottom: 8,
+    },
+
+    triageTagText: {
+      fontSize: 9,
+      fontWeight: "900",
+      letterSpacing: 0.8,
+    },
+
+    cursor: {
+      width: 7,
+      height: 14,
+      marginTop: 4,
+      borderRadius: 2,
+      backgroundColor: c.accentLight,
+      opacity: 0.75,
+    },
+
+    /* ===================== FONTES ===================== */
+
+    sourcesRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 5,
+      marginLeft: 36,
+      marginRight: 4,
+      marginTop: -6,
+      marginBottom: 14,
+    },
+
+    sourceChip: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 8,
+      backgroundColor: tint(0.08),
+      borderWidth: 1,
+      borderColor: tint(0.14),
+      maxWidth: 150,
+    },
+
+    sourceChipText: {
+      fontSize: 9,
+      fontWeight: "600",
+      color: c.textSecondary,
+    },
+
+    /* ===================== SKELETON ===================== */
+
+    skeletonBubble: {
+      flex: 1,
+      maxWidth: "79%",
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 18,
+      borderBottomLeftRadius: 5,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.035),
+    },
+
+    skeletonHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 10,
+    },
+
+    skeletonLine: {
+      height: 9,
+      borderRadius: 5,
+      marginBottom: 7,
+      backgroundColor: c.textLight,
     },
 
     /* ===================== ALERTAS DO PRONTUÁRIO ===================== */

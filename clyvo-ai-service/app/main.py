@@ -2,16 +2,14 @@
 
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from .config import settings
 from .llm import llm_client
 from .rag import knowledge_base
-from .routers import alerts, chat
-
+from .routers import alerts, chat, rpa
+from .rpa import scheduler
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,7 +23,6 @@ app = FastAPI(
     ),
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
@@ -34,45 +31,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request,
-    exc: RequestValidationError,
-):
-    body = await request.body()
-
-    logging.error("========== ERRO 422 ==========")
-    logging.error("URL: %s", request.url)
-    logging.error("BODY RECEBIDO: %s", body.decode("utf-8", errors="replace"))
-    logging.error("ERROS DE VALIDAÇÃO: %s", exc.errors())
-    logging.error("================================")
-
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": exc.errors(),
-        },
-    )
-
-
 app.include_router(chat.router)
 app.include_router(alerts.router)
+app.include_router(rpa.router)
 
 
-@app.get("/", tags=["infra"])
-def root() -> dict:
-    return {
-        "status": "ok",
-        "service": settings.app_name,
-        "version": settings.app_version,
-        "llm_enabled": llm_client.enabled,
-        "llm_model": settings.llm_model,
-    }
+@app.on_event("startup")
+async def iniciar_rpa() -> None:
+    """Liga o agendador diário de notificações junto com a API."""
+    scheduler.iniciar()
+
+
+@app.on_event("shutdown")
+async def encerrar_rpa() -> None:
+    await scheduler.parar()
 
 
 @app.get("/health", tags=["infra"])
 def health() -> dict:
+    """Health check — usado pelo App Service / ACI e pela pipeline de CD."""
     return {
         "status": "ok",
         "version": settings.app_version,
@@ -84,5 +61,11 @@ def health() -> dict:
         "rag": {
             "backend": knowledge_base.backend_name,
             "chunks": len(knowledge_base.chunks),
+        },
+        "rpa": {
+            "enabled": settings.rpa_enabled,
+            "schedule": f"{settings.rpa_hour:02d}:{settings.rpa_minute:02d}",
+            "timezone": settings.rpa_timezone,
+            "emailProvider": settings.email_provider,
         },
     }
