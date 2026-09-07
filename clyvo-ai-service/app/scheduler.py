@@ -1,18 +1,8 @@
-"""Agendador diário do RPA, sem dependência externa.
-
-Uma task asyncio dorme até o próximo horário configurado (fuso de São Paulo) e
-dispara a rotina. Em hospedagem que hiberna o serviço por inatividade, use
-também o disparo HTTP (`POST /api/rpa/run`) a partir de um cron externo — os
-dois caminhos chamam a mesma função `job.executar`.
-"""
-
 from __future__ import annotations
-
 import asyncio
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-
 from .config import settings
 from . import job
 

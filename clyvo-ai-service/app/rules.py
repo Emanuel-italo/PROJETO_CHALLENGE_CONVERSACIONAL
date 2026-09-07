@@ -298,9 +298,6 @@ def evaluate_pet(
         key=lambda alert: ordem[alert.severity]
     )
 
-    # -----------------------------------------------------------------------
-    # Resposta
-    # -----------------------------------------------------------------------
 
     return AlertsResponse(
         petId=pet.id,

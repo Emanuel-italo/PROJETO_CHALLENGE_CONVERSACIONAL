@@ -1,25 +1,11 @@
-"""Modo simulado: resposta determinística, sem chamar LLM externo.
-
-Usado quando LLM_API_KEY não está configurado ou quando o provedor falha. A
-resposta é montada a partir do motor de regras (fatos do pet) e do trecho mais
-relevante recuperado pelo RAG. A API sinaliza esse modo no campo `simulated`,
-para que a demonstração seja honesta sobre o que está gerando o texto.
-
-As listas de termos também são usadas como guardrail em `routers/chat.py`:
-mesmo com o LLM ativo, um relato com sinal de emergência tem a urgência elevada
-no código, independentemente da classificação do modelo.
-"""
-
 from __future__ import annotations
-
 import unicodedata
-
 from .rag import Chunk
 from .schemas import AlertsResponse, AlertSeverity, Pet, SuggestedAction, Urgency
 
 
 def _fold(text: str) -> str:
-    """Minúsculas e sem acento, para casar termos de forma tolerante."""
+    
     text = unicodedata.normalize("NFKD", text.lower())
     return "".join(c for c in text if not unicodedata.combining(c))
 

@@ -1,20 +1,8 @@
-"""Contratos de entrada e saída da API.
-
-Os modelos de domínio espelham `src/types/index.ts` do app mobile, para que o
-payload enviado pelo React Native seja aceito sem transformação.
-"""
-
 from enum import Enum
 from typing import Annotated, Any, Callable, Literal
-
 from pydantic import BaseModel, BeforeValidator, Field
 
 
-# --------------------------------------------------------------------------- #
-# Coerção tolerante (dados reais do Firebase/AsyncStorage)
-# --------------------------------------------------------------------------- #
-# O app pode enviar campos opcionais como null, números onde o schema espera
-# texto, ou listas como null. Em vez de recusar (422), normalizamos na entrada.
 def _as_str(v: Any) -> str:
     if v is None:
         return ""
@@ -52,9 +40,7 @@ Str = Annotated[str, BeforeValidator(_as_str)]
 Lista = BeforeValidator(_as_list)
 
 
-# --------------------------------------------------------------------------- #
-# Domínio (espelho do app mobile)
-# --------------------------------------------------------------------------- #
+
 class Vaccine(BaseModel):
     id: Str = ""
     name: Str = ""
@@ -93,9 +79,7 @@ class ChatMessage(BaseModel):
     content: Str = ""
 
 
-# --------------------------------------------------------------------------- #
-# Motor de regras
-# --------------------------------------------------------------------------- #
+
 class AlertSeverity(str, Enum):
     INFO = "info"
     ATENCAO = "atencao"
@@ -118,9 +102,7 @@ class AlertsResponse(BaseModel):
     alerts: list[Alert]
 
 
-# --------------------------------------------------------------------------- #
-# Chat
-# --------------------------------------------------------------------------- #
+
 class Urgency(str, Enum):
     BAIXA = "baixa"
     MEDIA = "media"
@@ -153,9 +135,7 @@ class ChatResponse(BaseModel):
     simulated: bool = False
 
 
-# --------------------------------------------------------------------------- #
-# RPA de notificações
-# --------------------------------------------------------------------------- #
+
 class RpaInscricaoRequest(BaseModel):
     pet: Pet
     tutorNome: str = ""

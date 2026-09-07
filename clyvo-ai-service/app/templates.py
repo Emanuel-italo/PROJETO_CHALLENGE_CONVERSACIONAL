@@ -1,7 +1,4 @@
-"""Montagem do e-mail enviado ao tutor."""
-
 from __future__ import annotations
-
 from .schemas import Alert, AlertSeverity, AlertsResponse, Pet
 
 CORES = {
