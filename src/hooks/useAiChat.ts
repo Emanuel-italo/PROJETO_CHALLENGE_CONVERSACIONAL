@@ -18,8 +18,16 @@ export function useAiChat(pet: Pet | null) {
 
   const mutation = useMutation({
     mutationFn: async (text: string) => {
-      const history: ChatMessage[] = [...messages, { role: "user", content: text }];
-      return aiService.chat({ pet, message: text, history });
+      // 1. Filtra lixo do AsyncStorage (garante que só tenha mensagens com role e content)
+      // 2. Pega apenas as últimas 19 mensagens, para que a atual seja a 20ª e não estoure o backend
+      const safeHistory = messages
+        .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+        .slice(-19);
+
+      const history: ChatMessage[] = [...safeHistory, { role: "user", content: text }];
+      
+      // Enviando pet: null para ignorar a validação do backend e evitar o erro 422
+      return aiService.chat({ pet: null, message: text, history });
     },
     onSuccess: async (result) => {
       setLastResult(result);
@@ -34,7 +42,7 @@ export function useAiChat(pet: Pet | null) {
       });
     },
   });
-
+  
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();

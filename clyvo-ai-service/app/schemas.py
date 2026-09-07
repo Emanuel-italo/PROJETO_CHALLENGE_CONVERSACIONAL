@@ -17,7 +17,7 @@ class Vaccine(BaseModel):
     id: str = ""
     name: str
     date: str = ""
-    nextDue: str = ""
+    next_due: str = Field(default="", alias="nextDue")
     done: bool = False
 
 
@@ -26,8 +26,8 @@ class Medication(BaseModel):
     name: str
     dosage: str = ""
     frequency: str = ""
-    startDate: str = ""
-    endDate: str = ""
+    start_date: str = Field(default="", alias="startDate")
+    end_date: str = Field(default="", alias="endDate")
     active: bool = True
 
 
@@ -39,11 +39,15 @@ class Pet(BaseModel):
     age: str = ""
     weight: str = ""
     color: str = ""
-    ownerId: str = ""
+    owner_id: str = Field(default="", alias="ownerId")
     vaccines: list[Vaccine] = Field(default_factory=list)
     medications: list[Medication] = Field(default_factory=list)
-    nextCheckup: str = ""
-    createdAt: str = ""
+    next_checkup: str = Field(default="", alias="nextCheckup")
+    created_at: str = Field(default="", alias="createdAt")
+    
+    class Config:
+        populate_by_name = True
+        allow_population_by_field_name = True
 
 
 class ChatMessage(BaseModel):
