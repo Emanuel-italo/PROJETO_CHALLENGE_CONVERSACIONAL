@@ -9,7 +9,7 @@ from .config import settings
 from .llm import llm_client
 from .rag import knowledge_base
 from .routers import alerts, chat, rpa
-from .rpa import scheduler
+from . import scheduler
 
 logging.basicConfig(level=logging.INFO)
 
