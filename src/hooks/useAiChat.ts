@@ -26,8 +26,8 @@ export function useAiChat(pet: Pet | null) {
 
       const history: ChatMessage[] = [...safeHistory, { role: "user", content: text }];
       
-      // Enviando pet: null para ignorar a validação do backend e evitar o erro 422
-      return aiService.chat({ pet: null, message: text, history });
+      // CORREÇÃO AQUI: Agora enviamos o objeto "pet" real em vez de null!
+      return aiService.chat({ pet: pet, message: text, history });
     },
     onSuccess: async (result) => {
       setLastResult(result);
