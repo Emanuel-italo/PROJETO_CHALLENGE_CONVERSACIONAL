@@ -6,6 +6,7 @@ from .llm import llm_client
 from .rag import knowledge_base
 from .routers import alerts, chat, rpa, speech
 from .stt import stt_client
+from .tts import tts_client
 from . import scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +62,10 @@ def health() -> dict:
         "stt": {
             "enabled": stt_client.enabled,
             "model": settings.stt_model if stt_client.enabled else None,
+        },
+        "tts": {
+            "enabled": tts_client.enabled,
+            "voiceId": settings.elevenlabs_voice_id if tts_client.enabled else None,
         },
         "rpa": {
             "enabled": settings.rpa_enabled,

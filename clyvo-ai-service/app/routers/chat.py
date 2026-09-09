@@ -48,6 +48,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 
     simulated = False
+    llm_error: str | None = None
     if llm_client.enabled:
         try:
             raw = await llm_client.complete_json(SYSTEM_PROMPT, messages)
@@ -55,9 +56,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
             logger.warning("Falha no LLM, caindo para modo simulado: %s", exc)
             raw = simulate(request.pet, request.message, evaluation, passages)
             simulated = True
+            llm_error = str(exc)
     else:
         raw = simulate(request.pet, request.message, evaluation, passages)
         simulated = True
+        llm_error = "LLM não configurado (LLM_API_KEY ausente)."
 
     urgency = _coerce(raw.get("urgency"), Urgency, Urgency.MEDIA)
     action = _coerce(raw.get("suggestedAction"), SuggestedAction, SuggestedAction.NENHUMA)
@@ -91,4 +94,5 @@ async def chat(request: ChatRequest) -> ChatResponse:
         sources=sources,
         alerts=evaluation.alerts if evaluation else [],
         simulated=simulated,
+        llmError=llm_error,
     )

@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     stt_model: str = "whisper-1"
     stt_timeout_seconds: float = 60.0
 
+    # TTS (ElevenLabs) — voz personalizada das respostas.
+    # Voice IDs: https://elevenlabs.io/app/voice-library
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_model_id: str = "eleven_multilingual_v2"
+    elevenlabs_timeout_seconds: float = 30.0
+
 
     rag_backend: str = "simple"
     rag_top_k: int = 3
@@ -53,6 +60,10 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.llm_api_key.strip())
+
+    @property
+    def elevenlabs_enabled(self) -> bool:
+        return bool(self.elevenlabs_api_key.strip())
 
 
 @lru_cache

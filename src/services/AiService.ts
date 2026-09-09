@@ -188,6 +188,10 @@ class AiService {
   async transcribe(uri: string): Promise<string> {
     return transcreverAudio(uri);
   }
+
+  speechSynthesisUrl(text: string): string {
+    return `${BASE_URL}/api/speech/synthesize?text=${encodeURIComponent(text)}`;
+  }
 }
 
 export const aiService = new AiService();

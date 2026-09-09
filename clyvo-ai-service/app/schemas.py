@@ -133,6 +133,7 @@ class ChatResponse(BaseModel):
     sources: list[str] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
     simulated: bool = False
+    llmError: str | None = None
 
 
 
