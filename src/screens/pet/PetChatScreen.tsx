@@ -1,256 +1,717 @@
 // PetChatScreen.tsx
 //
-// Tela aprimorada com animações premium e um Menu Lateral (Drawer)
-// inspirado no layout do Google Gemini.
+// Tela de chat do Clyvo — versão responsiva.
 //
-// Depende de dois arquivos novos:
+// Dependências existentes:
 //   src/styles/theme.ts
 //   src/components/RichText.tsx
+//   react-native-safe-area-context  (já vem no Expo + React Navigation)
+//
+// O que mudou em relação à versão anterior:
+//   • Escala fluida de tipografia e espaçamento (useResponsive)
+//   • Safe area real via insets, sem Platform.OS hardcoded
+//   • Sidebar permanente em tablet/desktop, overlay em celular
+//   • FlatList com itens memoizados no lugar do ScrollView
+//   • Alvos de toque com mínimo de 44px e labels de acessibilidade
+//   • Respeita "reduzir movimento" do sistema
+//   • Coluna de leitura com largura máxima (conforto de leitura)
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
-  View,
-  Text,
-  ScrollView,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
+  AccessibilityInfo,
   ActivityIndicator,
-  StyleSheet,
-  Keyboard,
   Animated,
   Easing,
+  FlatList,
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
   Share,
-  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
   TouchableWithoutFeedback,
+  View,
+  useWindowDimensions,
 } from "react-native";
+
+import {
+  useSafeAreaInsets,
+  type EdgeInsets,
+} from "react-native-safe-area-context";
 
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-
 import { Ionicons } from "@expo/vector-icons";
 
 import { RootStackParamList } from "../../types";
 import { usePets } from "../../hooks/usePets";
 import { useAiChat } from "../../hooks/useAiChat";
 import { usePetRisk } from "../../hooks/usePetRisk";
+import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
+import { useSpeechOutput } from "../../hooks/useSpeechOutput";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
-import {
-  DarkColors,
-  LightColors,
-  Theme,
-  useTheme,
-} from "../../styles/theme";
+import { DarkColors, LightColors, Theme, useTheme } from "../../styles/theme";
 import RichText from "../../components/RichText";
+import { showAlert } from "../../utils/showAlert";
+
+/* ============================================================
+   TIPOS
+============================================================ */
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-
 type AiAlert = ChatResult["alerts"][number];
+type IconName = React.ComponentProps<typeof Ionicons>["name"];
+type Feedback = Record<number, "like" | "dislike">;
 
-const SUGESTOES = [
-  { icon: "medkit-outline" as const, text: "A vacina dela está em dia?" },
-  { icon: "restaurant-outline" as const, text: "Ele está comendo menos hoje" },
-  { icon: "calendar-outline" as const, text: "Quando é o próximo check-up?" },
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+/** Métricas calculadas uma vez por mudança de viewport. */
+type Metrics = {
+  width: number;
+  height: number;
+  /** < 360dp — iPhone SE, Galaxy A0x */
+  isCompact: boolean;
+  /** >= 720dp — tablets em pé */
+  isTablet: boolean;
+  /** >= 1080dp — tablets deitados, web */
+  isWide: boolean;
+  /** >= 1300dp em paisagem — espaço de sobra para um 3º painel */
+  isDesktop: boolean;
+  /** altura pequena: teclado aberto em telas curtas */
+  isShort: boolean;
+  isLandscape: boolean;
+  /** 'permanent' mantém a sidebar sempre visível ao lado do chat */
+  sidebarMode: "overlay" | "permanent";
+  /** largura da coluna de leitura */
+  contentMaxWidth: number;
+  /** largura máxima de um balão de mensagem */
+  bubbleMaxWidth: number;
+  drawerWidth: number;
+  /** > 0 quando há espaço para o painel fixo de números do pet */
+  statsPanelWidth: number;
+  gutter: number;
+  /** colunas do grid de triagem */
+  triageColumns: number;
+  insets: EdgeInsets;
+  /** escala de fonte */
+  fs: (n: number) => number;
+  /** escala de espaçamento */
+  sp: (n: number) => number;
+};
+
+/* ============================================================
+   CONTEÚDO
+============================================================ */
+
+const SUGESTOES: { icon: IconName; text: string }[] = [
+  { icon: "medkit-outline", text: "A vacina dela está em dia?" },
+  { icon: "restaurant-outline", text: "Ele está comendo menos hoje" },
+  { icon: "calendar-outline", text: "Quando é o próximo check-up?" },
 ];
 
-const ACOES_RAPIDAS = [
+const ACOES_RAPIDAS: {
+  icon: IconName;
+  title: string;
+  subtitle: string;
+  action: SuggestedAction;
+}[] = [
   {
-    icon: "medkit-outline" as const,
+    icon: "medkit-outline",
     title: "Vacinas",
-    subtitle: "Carteira",
+    subtitle: "Ver carteira",
     action: "atualizar_vacina" as SuggestedAction,
   },
   {
-    icon: "calendar-outline" as const,
+    icon: "calendar-outline",
     title: "Consulta",
     subtitle: "Agendar",
     action: "agendar_consulta" as SuggestedAction,
   },
 ];
 
-// --- COMPONENTE AUXILIAR PARA ANIMAÇÃO DE MENSAGENS ---
-const AnimatedMessage = ({ children, isUser }: { children: React.ReactNode; isUser: boolean }) => {
-  const slideAnim = useRef(new Animated.Value(0)).current;
+const SINTOMAS: { emoji: string; label: string; termo: string }[] = [
+  { emoji: "🤢", label: "Vômito", termo: "vomitando" },
+  { emoji: "💧", label: "Diarreia", termo: "com diarreia" },
+  { emoji: "🍖", label: "Apetite", termo: "sem querer comer" },
+  { emoji: "🩹", label: "Dor", termo: "com dor" },
+];
+
+const CONVERSAS_RECENTES = [
+  "Dúvida sobre vacinação",
+  "Ele está comendo menos",
+  "Análise de exame de sangue",
+  "Manchas na pele perto da orelha",
+  "Agendamento de banho e tosa",
+];
+
+const LIMITE_CARACTERES = 1000;
+
+/* ============================================================
+   HOOKS DE APOIO
+============================================================ */
+
+/**
+ * Traduz o viewport atual em métricas de layout.
+ * Toda decisão responsiva da tela sai daqui — nada de número mágico
+ * espalhado pelos estilos.
+ */
+function useResponsive(): Metrics {
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
+  return useMemo<Metrics>(() => {
+    const isCompact = width < 360;
+    const isTablet = width >= 720;
+    const isWide = width >= 1080;
+    const isShort = height < 680;
+    const isLandscape = width > height;
+    const isDesktop = width >= 1300 && isLandscape;
+
+    // Fator de escala tipográfica. Cresce devagar: texto de tablet
+    // grande demais fica infantil, e o objetivo é conforto de leitura.
+    const typeFactor = isWide ? 1.14 : isTablet ? 1.07 : isCompact ? 0.93 : 1;
+
+    // Espaçamento cresce mais que a fonte: telas grandes pedem ar,
+    // telas pequenas pedem densidade.
+    const spaceFactor = isWide ? 1.3 : isTablet ? 1.18 : isCompact ? 0.86 : 1;
+
+    const fs = (n: number) => Math.round(n * typeFactor);
+    const sp = (n: number) => Math.round(n * spaceFactor);
+
+    const sidebarMode: Metrics["sidebarMode"] =
+      isTablet && isLandscape ? "permanent" : "overlay";
+
+    const drawerWidth =
+      sidebarMode === "permanent"
+        ? Math.min(320, width * 0.28)
+        : Math.min(340, width * 0.86);
+
+    // Painel fixo de números do pet: só cabe quando sobra espaço depois
+    // da sidebar + coluna de leitura confortável.
+    const statsPanelWidth = isDesktop ? Math.min(300, width * 0.19) : 0;
+
+    // Largura da área de chat depois de descontar a sidebar fixa e o painel.
+    const chatWidth =
+      (sidebarMode === "permanent" ? width - drawerWidth : width) -
+      statsPanelWidth;
+
+    // Linha de leitura confortável fica abaixo de ~72 caracteres.
+    const contentMaxWidth = Math.min(chatWidth, isWide ? 860 : 760);
+
+    const gutter = sp(isTablet ? 20 : 14);
+
+    // Em telas largas o balão para de crescer em % e passa a ter teto
+    // absoluto, senão a linha fica longa demais para ler.
+    const bubbleMaxWidth = isTablet
+      ? Math.min(620, (contentMaxWidth - gutter * 2) * 0.82)
+      : (Math.min(chatWidth, contentMaxWidth) - gutter * 2) * 0.86;
+
+    return {
+      width,
+      height,
+      isCompact,
+      isTablet,
+      isWide,
+      isDesktop,
+      isShort,
+      isLandscape,
+      sidebarMode,
+      contentMaxWidth,
+      bubbleMaxWidth,
+      drawerWidth,
+      statsPanelWidth,
+      gutter,
+      triageColumns: isTablet ? 4 : 2,
+      insets,
+      fs,
+      sp,
+    };
+  }, [width, height, insets]);
+}
+
+/** Respeita a preferência de "reduzir movimento" do sistema. */
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
 
   useEffect(() => {
-    Animated.spring(slideAnim, {
+    let vivo = true;
+
+    AccessibilityInfo.isReduceMotionEnabled().then((valor) => {
+      if (vivo) setReduce(valor);
+    });
+
+    const sub = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReduce,
+    );
+
+    return () => {
+      vivo = false;
+      sub?.remove();
+    };
+  }, []);
+
+  return reduce;
+}
+
+/* ============================================================
+   SUBCOMPONENTES MEMOIZADOS
+============================================================ */
+
+type Estilos = ReturnType<typeof makeStyles>;
+
+/**
+ * Entrada animada de uma mensagem. Anima só na montagem — mensagens
+ * antigas ficam paradas enquanto novas chegam.
+ */
+const Entrada = memo(function Entrada({
+  children,
+  disabled,
+}: {
+  children: React.ReactNode;
+  disabled: boolean;
+}) {
+  const anim = useRef(new Animated.Value(disabled ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (disabled) return;
+    Animated.spring(anim, {
       toValue: 1,
       tension: 60,
-      friction: 8,
+      friction: 9,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [disabled, anim]);
+
+  if (disabled) return <>{children}</>;
 
   return (
     <Animated.View
       style={{
-        opacity: slideAnim,
+        opacity: anim,
         transform: [
           {
-            translateY: slideAnim.interpolate({
+            translateY: anim.interpolate({
               inputRange: [0, 1],
-              outputRange: [20, 0],
+              outputRange: [14, 0],
             }),
           },
-          {
-            scale: slideAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0.95, 1],
-            }),
-          }
         ],
       }}
     >
       {children}
     </Animated.View>
   );
-};
-// ------------------------------------------------------
+});
+
+/**
+ * Um balão de mensagem. Memoizado para que o streaming da última
+ * mensagem não force o re-render de todo o histórico.
+ */
+const Bolha = memo(
+  function Bolha({
+    msg,
+    index,
+    s,
+    theme,
+    texto,
+    mostrarCursor,
+    tagUrgencia,
+    feedback,
+    onFeedback,
+    onShare,
+    semAnimacao,
+  }: {
+    msg: ChatMessage;
+    index: number;
+    s: Estilos;
+    theme: Theme;
+    texto: string;
+    mostrarCursor: boolean;
+    tagUrgencia: { cor: string; rotulo: string; icone: IconName } | null;
+    feedback?: "like" | "dislike";
+    onFeedback: (index: number, valor: "like" | "dislike") => void;
+    onShare: (texto: string) => void;
+    semAnimacao: boolean;
+  }) {
+    const c = theme.colors;
+    const isUser = msg.role === "user";
+
+    return (
+      <Entrada disabled={semAnimacao}>
+        <View style={[s.messageRow, isUser ? s.messageRowUser : s.messageRowAi]}>
+          {!isUser && (
+            <View style={s.messageAvatar}>
+              <Ionicons name="sparkles" size={14} color={c.white} />
+            </View>
+          )}
+
+          <View
+            style={[
+              s.messageContent,
+              isUser ? s.messageContentUser : s.messageContentAi,
+            ]}
+          >
+            <Text style={isUser ? s.messageLabelUser : s.messageLabel}>
+              {isUser ? "Você" : "Clyvo"}
+            </Text>
+
+            <View style={isUser ? s.userBubble : s.aiBubble}>
+              {isUser ? (
+                <Text style={s.userText} selectable>
+                  {msg.content}
+                </Text>
+              ) : (
+                <>
+                  {tagUrgencia && (
+                    <View
+                      style={[
+                        s.triageTag,
+                        {
+                          backgroundColor: `${tagUrgencia.cor}1A`,
+                          borderColor: tagUrgencia.cor,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={tagUrgencia.icone}
+                        size={12}
+                        color={tagUrgencia.cor}
+                      />
+                      <Text
+                        style={[s.triageTagText, { color: tagUrgencia.cor }]}
+                      >
+                        {tagUrgencia.rotulo}
+                      </Text>
+                    </View>
+                  )}
+
+                  <RichText
+                    content={texto}
+                    style={s.aiText}
+                    accentColor={c.accentLight}
+                    codeBackground={theme.tint(0.12)}
+                  />
+
+                  {mostrarCursor && <View style={s.cursor} />}
+                </>
+              )}
+            </View>
+
+            {!isUser && (
+              <View style={s.messageActions}>
+                <Pressable
+                  style={s.messageAction}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Resposta útil"
+                  accessibilityState={{ selected: feedback === "like" }}
+                  onPress={() => onFeedback(index, "like")}
+                >
+                  <Ionicons
+                    name={feedback === "like" ? "thumbs-up" : "thumbs-up-outline"}
+                    size={15}
+                    color={feedback === "like" ? c.accentLight : c.textSecondary}
+                  />
+                </Pressable>
+
+                <Pressable
+                  style={s.messageAction}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Resposta não ajudou"
+                  accessibilityState={{ selected: feedback === "dislike" }}
+                  onPress={() => onFeedback(index, "dislike")}
+                >
+                  <Ionicons
+                    name={
+                      feedback === "dislike"
+                        ? "thumbs-down"
+                        : "thumbs-down-outline"
+                    }
+                    size={15}
+                    color={
+                      feedback === "dislike" ? c.accentLight : c.textSecondary
+                    }
+                  />
+                </Pressable>
+
+                <Pressable
+                  style={s.messageAction}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Compartilhar resposta"
+                  onPress={() => onShare(msg.content)}
+                >
+                  <Ionicons
+                    name="share-outline"
+                    size={15}
+                    color={c.textSecondary}
+                  />
+                </Pressable>
+              </View>
+            )}
+          </View>
+
+          {isUser && (
+            <View style={s.userAvatar}>
+              <Ionicons name="person" size={14} color={c.white} />
+            </View>
+          )}
+        </View>
+      </Entrada>
+    );
+  },
+  (a, b) =>
+    a.texto === b.texto &&
+    a.msg.content === b.msg.content &&
+    a.mostrarCursor === b.mostrarCursor &&
+    a.feedback === b.feedback &&
+    a.s === b.s &&
+    a.tagUrgencia?.rotulo === b.tagUrgencia?.rotulo,
+);
+
+/* ============================================================
+   TELA
+============================================================ */
 
 export default function PetChatScreen() {
   const navigation = useNavigation<Nav>();
+  const r = useResponsive();
+  const reduceMotion = useReduceMotion();
+
+  /* ---------- tema ---------- */
 
   const systemTheme = useTheme();
   const [darkMode, setDarkMode] = useState<boolean>(systemTheme.isDark);
 
   const theme = useMemo<Theme>(() => {
     const isDark = darkMode;
-
     return {
       colors: isDark ? DarkColors : LightColors,
       isDark,
-      overlay: (opacity: number) =>
-        isDark ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`,
-      tint: (opacity: number) =>
-        isDark ? `rgba(90,169,255,${opacity})` : `rgba(74,158,255,${opacity})`,
+      overlay: (o: number) =>
+        isDark ? `rgba(255,255,255,${o})` : `rgba(0,0,0,${o})`,
+      tint: (o: number) =>
+        isDark ? `rgba(90,169,255,${o})` : `rgba(74,158,255,${o})`,
     };
   }, [darkMode]);
 
   const c = theme.colors;
-  const s = useMemo(() => makeStyles(theme), [theme]);
+  const s = useMemo(() => makeStyles(theme, r), [theme, r]);
 
-  const toggleTheme = () => {
-    setDarkMode((current) => !current);
-  };
+  const toggleTheme = useCallback(() => setDarkMode((v) => !v), []);
 
-  /* =========================================================
-     PET SELECIONADO & ESTADOS
-  ========================================================= */
+  /* ---------- dados ---------- */
 
   const { pets } = usePets();
   const [selectedPetId, setSelectedPetId] = useState<string | null>(null);
 
   const pet =
-    pets.find((item) => item.id === selectedPetId) ??
-    (pets.length > 0 ? pets[0] : null);
+    pets.find((p) => p.id === selectedPetId) ?? (pets.length ? pets[0] : null);
 
   useEffect(() => {
-    if (!selectedPetId && pets.length > 0) {
-      setSelectedPetId(pets[0].id);
-    }
+    if (!selectedPetId && pets.length) setSelectedPetId(pets[0].id);
   }, [pets, selectedPetId]);
 
   const { messages, sending, lastResult, send, reset } = useAiChat(pet);
   const { data: risk } = usePetRisk(pet);
 
-  const [streamedText, setStreamedText] = useState("");
-  const streamIndexRef = useRef(-1);
-  const primeiraCargaRef = useRef(true);
+  /* ---------- voz ---------- */
+
+  const voz = useVoiceRecorder();
+  const fala = useSpeechOutput();
+
+  /* ---------- estado de UI ---------- */
 
   const [input, setInput] = useState("");
-  const [inputFocused, setInputFocused] = useState(false);
+  const [inputFocado, setInputFocado] = useState(false);
+  const [alturaInput, setAlturaInput] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showTriage, setShowTriage] = useState(false);
-  
-  // Controle do Menu Lateral (Drawer)
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [likedMessages, setLikedMessages] = useState<Record<number, "like" | "dislike">>({});
+  const [showPetStats, setShowPetStats] = useState(false);
+  const [drawerAberto, setDrawerAberto] = useState(false);
+  const [sidebarVisivel, setSidebarVisivel] = useState(true);
+  const [feedbacks, setFeedbacks] = useState<Feedback>({});
 
-  const scrollRef = useRef<ScrollView>(null);
+  const [streamedText, setStreamedText] = useState("");
+  const streamIndexRef = useRef(-1);
+  const primeiraCargaRef = useRef(true);
+  const noFimRef = useRef(true);
 
-  /* =========================================================
-     ANIMAÇÕES GLOBAIS
-  ========================================================= */
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+
+  const sidebarFixa = r.sidebarMode === "permanent";
+  const drawerVisivel = sidebarFixa ? sidebarVisivel : drawerAberto;
+
+  /* ---------- animações ---------- */
 
   const avatarPulse = useRef(new Animated.Value(1)).current;
   const avatarGlow = useRef(new Animated.Value(0.25)).current;
-  const welcomeScale = useRef(new Animated.Value(0.92)).current;
+  const welcomeScale = useRef(new Animated.Value(0.94)).current;
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
-  const typingAnimation = useRef(new Animated.Value(0)).current;
-  const triageAnimation = useRef(new Animated.Value(0)).current;
+  const typingAnim = useRef(new Animated.Value(0)).current;
+  const triageAnim = useRef(new Animated.Value(0)).current;
   const scrollBtnAnim = useRef(new Animated.Value(0)).current;
-  const drawerAnim = useRef(new Animated.Value(0)).current; // Animação do Drawer
+  const drawerAnim = useRef(new Animated.Value(0)).current;
+  const riskAnim = useRef(new Animated.Value(0)).current;
 
+  // Entrada da tela + respiração do avatar.
   useEffect(() => {
     Animated.parallel([
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(avatarPulse, { toValue: 1.045, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(avatarPulse, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        ])
-      ),
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(avatarGlow, { toValue: 0.7, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(avatarGlow, { toValue: 0.25, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        ])
-      ),
-      Animated.spring(welcomeScale, { toValue: 1, friction: 7, tension: 42, useNativeDriver: true }),
-      Animated.timing(welcomeOpacity, { toValue: 1, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.spring(welcomeScale, {
+        toValue: 1,
+        friction: 8,
+        tension: 44,
+        useNativeDriver: true,
+      }),
+      Animated.timing(welcomeOpacity, {
+        toValue: 1,
+        duration: reduceMotion ? 0 : 600,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
     ]).start();
 
+    if (reduceMotion) return;
+
+    const pulso = Animated.loop(
+      Animated.sequence([
+        Animated.timing(avatarPulse, {
+          toValue: 1.045,
+          duration: 1200,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(avatarPulse, {
+          toValue: 1,
+          duration: 1200,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    const brilho = Animated.loop(
+      Animated.sequence([
+        Animated.timing(avatarGlow, {
+          toValue: 0.7,
+          duration: 1400,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(avatarGlow, {
+          toValue: 0.25,
+          duration: 1400,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    pulso.start();
+    brilho.start();
+
     return () => {
-      avatarPulse.stopAnimation();
-      avatarGlow.stopAnimation();
+      pulso.stop();
+      brilho.stop();
     };
-  }, []);
+  }, [reduceMotion, avatarPulse, avatarGlow, welcomeScale, welcomeOpacity]);
 
   useEffect(() => {
-    if (!sending) {
-      typingAnimation.setValue(0);
+    if (!sending || reduceMotion) {
+      typingAnim.setValue(0);
       return;
     }
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(typingAnimation, { toValue: 1, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(typingAnimation, { toValue: 0, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
+        Animated.timing(typingAnim, {
+          toValue: 1,
+          duration: 620,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(typingAnim, {
+          toValue: 0,
+          duration: 620,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
     );
     loop.start();
     return () => loop.stop();
-  }, [sending]);
+  }, [sending, reduceMotion, typingAnim]);
 
   useEffect(() => {
     if (!showTriage) return;
-    triageAnimation.setValue(0);
-    Animated.spring(triageAnimation, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }).start();
-  }, [showTriage]);
+    triageAnim.setValue(0);
+    Animated.spring(triageAnim, {
+      toValue: 1,
+      friction: 9,
+      tension: 42,
+      useNativeDriver: true,
+    }).start();
+  }, [showTriage, triageAnim]);
 
   useEffect(() => {
-    Animated.timing(scrollBtnAnim, { toValue: showScrollButton ? 1 : 0, duration: 250, useNativeDriver: true }).start();
-  }, [showScrollButton]);
+    Animated.timing(scrollBtnAnim, {
+      toValue: showScrollButton ? 1 : 0,
+      duration: reduceMotion ? 0 : 220,
+      useNativeDriver: true,
+    }).start();
+  }, [showScrollButton, reduceMotion, scrollBtnAnim]);
 
-  // Animação do Menu Lateral (Drawer)
   useEffect(() => {
     Animated.timing(drawerAnim, {
-      toValue: isDrawerOpen ? 1 : 0,
-      duration: 300,
+      toValue: drawerVisivel ? 1 : 0,
+      duration: reduceMotion ? 0 : 280,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [isDrawerOpen]);
+  }, [drawerVisivel, reduceMotion, drawerAnim]);
 
   useEffect(() => {
-    const ultima = messages[messages.length - 1];
+    Animated.timing(riskAnim, {
+      toValue: risk?.riskScore ?? 0,
+      duration: reduceMotion ? 0 : 900,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [risk?.riskScore, reduceMotion, riskAnim]);
+
+  // Fecha o overlay ao girar para um layout com sidebar fixa.
+  useEffect(() => {
+    if (sidebarFixa) setDrawerAberto(false);
+  }, [sidebarFixa]);
+
+  /* ---------- streaming de texto ---------- */
+
+  useEffect(() => {
+    const ultima = messages[messages.length - 1] as ChatMessage | undefined;
     if (!ultima || ultima.role !== "assistant") return;
 
     const indice = messages.length - 1;
 
+    // Histórico já carregado: mostra inteiro, sem digitar.
     if (primeiraCargaRef.current) {
       primeiraCargaRef.current = false;
       streamIndexRef.current = indice;
@@ -261,961 +722,2351 @@ export default function PetChatScreen() {
     if (streamIndexRef.current === indice) return;
 
     streamIndexRef.current = indice;
+    fala.falar(ultima.content);
+
+    if (reduceMotion) {
+      setStreamedText(ultima.content);
+      return;
+    }
+
     setStreamedText("");
 
-    let posicao = 0;
+    // Velocidade constante por tempo, não por tick: o texto sai no mesmo
+    // ritmo em qualquer aparelho.
     const total = ultima.content.length;
+    const inicio = Date.now();
+    const charsPorSegundo = 220;
 
     const timer = setInterval(() => {
-      posicao = Math.min(total, posicao + 3);
-      setStreamedText(ultima.content.slice(0, posicao));
-      if (posicao >= total) clearInterval(timer);
-    }, 16);
+      const decorrido = (Date.now() - inicio) / 1000;
+      const pos = Math.min(total, Math.ceil(decorrido * charsPorSegundo));
+      setStreamedText(ultima.content.slice(0, pos));
+      if (pos >= total) clearInterval(timer);
+    }, 32);
 
     return () => clearInterval(timer);
-  }, [messages]);
+  }, [messages, reduceMotion, fala.falar]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    }, 150);
-    return () => clearTimeout(timer);
-  }, [messages.length, sending, streamedText]);
+  /* ---------- rolagem ---------- */
 
-  const riskAnim = useRef(new Animated.Value(0)).current;
+  const irParaOFim = useCallback((animated = true) => {
+    listRef.current?.scrollToEnd({ animated });
+  }, []);
 
-  useEffect(() => {
-    Animated.timing(riskAnim, {
-      toValue: risk?.riskScore ?? 0,
-      duration: 900,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
-  }, [risk?.riskScore]);
+  const aoRolar = useCallback((e: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const distancia =
+      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    noFimRef.current = distancia < 120;
+    setShowScrollButton(distancia > 200);
+  }, []);
 
-  /* =========================================================
-     FUNÇÕES DE AÇÃO
-  ========================================================= */
+  const aoMudarTamanho = useCallback(() => {
+    if (noFimRef.current) irParaOFim(true);
+  }, [irParaOFim]);
 
-  const handleSend = async (text?: string) => {
-    const content = (text ?? input).trim();
-    if (!content || sending) return;
+  /* ---------- ações ---------- */
 
-    setInput("");
-    setShowSuggestions(false);
-    setShowQuickActions(false);
-    setIsDrawerOpen(false);
-    Keyboard.dismiss();
+  const handleSend = useCallback(
+    async (texto?: string) => {
+      const conteudo = (texto ?? input).trim();
+      if (!conteudo || sending) return;
 
-    await send(content);
-  };
+      setInput("");
+      setAlturaInput(0);
+      setShowSuggestions(false);
+      setShowQuickActions(false);
+      setShowTriage(false);
+      if (!sidebarFixa) setDrawerAberto(false);
+      noFimRef.current = true;
+      Keyboard.dismiss();
 
-  const handleClearChat = () => {
-    if (messages.length === 0) return;
-    Alert.alert(
-      "Limpar conversa",
-      "Tem certeza que deseja apagar toda a conversa?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Limpar",
-          style: "destructive",
-          onPress: () => {
-            reset();
-            setShowSuggestions(true);
-            setShowQuickActions(false);
-            setShowTriage(false);
-            setLikedMessages({});
-            setStreamedText("");
-            streamIndexRef.current = -1;
-            setTimeout(() => {
-              scrollRef.current?.scrollTo({ y: 0, animated: true });
-            }, 100);
-          },
+      await send(conteudo);
+    },
+    [input, sending, send, sidebarFixa],
+  );
+
+  const handleMicPress = useCallback(async () => {
+    if (sending || voz.transcrevendo) return;
+
+    if (voz.gravando) {
+      const { texto, erro } = await voz.parar();
+      if (texto) {
+        await handleSend(texto);
+      } else if (erro) {
+        showAlert("Não deu para entender o áudio", erro);
+      }
+      return;
+    }
+
+    fala.pararFala();
+    const { ok, erro } = await voz.iniciar();
+    if (!ok && erro) {
+      showAlert("Microfone indisponível", erro);
+    }
+  }, [sending, voz, fala, handleSend]);
+
+  const handleClearChat = useCallback(() => {
+    if (!messages.length) return;
+    showAlert("Limpar conversa", "Isso apaga todas as mensagens desta conversa.", [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Limpar",
+        style: "destructive",
+        onPress: () => {
+          reset();
+          setShowSuggestions(true);
+          setShowQuickActions(false);
+          setShowTriage(false);
+          setFeedbacks({});
+          setStreamedText("");
+          streamIndexRef.current = -1;
+          primeiraCargaRef.current = true;
         },
-      ],
+      },
+    ]);
+  }, [messages.length, reset]);
+
+  const acaoDestino: Partial<Record<SuggestedAction, keyof RootStackParamList>> =
+    useMemo(
+      () => ({
+        agendar_consulta: "HealthCalendar",
+        atualizar_vacina: "Vaccines",
+      }),
+      [],
     );
-  };
 
-  const handleScroll = (event: any) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    setShowScrollButton(distanceFromBottom > 180);
-  };
+  const handleQuickAction = useCallback(
+    (action: SuggestedAction) => {
+      const alvo = acaoDestino[action];
+      if (!alvo) return;
+      setShowQuickActions(false);
+      navigation.navigate(alvo as never);
+    },
+    [acaoDestino, navigation],
+  );
 
-  const scrollToBottom = () => {
-    scrollRef.current?.scrollToEnd({ animated: true });
-  };
+  const handleTriage = useCallback(
+    (termo: string) => {
+      setShowTriage(false);
+      setShowSuggestions(false);
+      handleSend(`Quero fazer uma triagem. O meu pet está ${termo}.`);
+    },
+    [handleSend],
+  );
 
-  const acaoDestino: Partial<Record<SuggestedAction, keyof RootStackParamList>> = {
-    agendar_consulta: "HealthCalendar",
-    atualizar_vacina: "Vaccines",
-  };
+  const handleFeedback = useCallback((index: number, valor: "like" | "dislike") => {
+    setFeedbacks((atual) => ({ ...atual, [index]: valor }));
+  }, []);
 
-  const handleQuickAction = (action: SuggestedAction) => {
-    const alvo = acaoDestino[action];
-    if (!alvo) return;
-    setShowQuickActions(false);
-    navigation.navigate(alvo as never);
-  };
-
-  const handleTriage = (symptom: string) => {
-    setShowTriage(false);
-    setShowSuggestions(false);
-    handleSend(`Quero fazer uma triagem. O meu pet está com ${symptom}.`);
-  };
-
-  const handleFeedback = (index: number, value: "like" | "dislike") => {
-    setLikedMessages((current) => ({ ...current, [index]: value }));
-  };
-
-  const handleShare = async (text: string) => {
+  const handleShare = useCallback(async (texto: string) => {
     try {
-      await Share.share({ message: text });
-    } catch {}
-  };
+      await Share.share({ message: texto });
+    } catch {
+      /* usuário cancelou */
+    }
+  }, []);
 
-  /* =========================================================
-     VARIÁVEIS DE ESTADO VISUAL
-  ========================================================= */
+  /* ---------- derivados ---------- */
 
-  const urgente = lastResult?.urgency === "alta" || lastResult?.urgency === "emergencia";
+  const urgencyMeta = useCallback(
+    (urgency?: string) => {
+      if (urgency === "emergencia")
+        return { cor: c.accentRed, rotulo: "Emergência", icone: "warning" as IconName };
+      if (urgency === "alta")
+        return { cor: c.accentOrange, rotulo: "Urgente", icone: "alert-circle" as IconName };
+      if (urgency === "media")
+        return { cor: c.accentLight, rotulo: "Avaliar", icone: "time-outline" as IconName };
+      return {
+        cor: c.accentGreen,
+        rotulo: "Rotina",
+        icone: "checkmark-circle-outline" as IconName,
+      };
+    },
+    [c],
+  );
+
+  const urgente =
+    lastResult?.urgency === "alta" || lastResult?.urgency === "emergencia";
   const emergencia = lastResult?.urgency === "emergencia";
   const destino = lastResult ? acaoDestino[lastResult.suggestedAction] : undefined;
 
-  const urgencyMeta = (urgency?: string) => {
-    if (urgency === "emergencia") return { cor: c.accentRed, rotulo: "EMERGÊNCIA", icone: "warning" as const };
-    if (urgency === "alta") return { cor: c.accentOrange, rotulo: "URGENTE", icone: "alert-circle" as const };
-    if (urgency === "media") return { cor: c.accentLight, rotulo: "AVALIAR", icone: "time-outline" as const };
-    return { cor: c.accentGreen, rotulo: "ROTINA", icone: "checkmark-circle-outline" as const };
-  };
+  const score = risk?.riskScore ?? 0;
+  const riskCor =
+    score >= 60 ? c.accentRed : score >= 30 ? c.accentOrange : c.accentGreen;
 
-  const riskCor = (risk?.riskScore ?? 0) >= 60 ? c.accentRed : (risk?.riskScore ?? 0) >= 30 ? c.accentOrange : c.accentGreen;
-  const alertColor = (severity: AiAlert["severity"]) => severity === "critico" ? c.accentRed : severity === "atencao" ? c.accentOrange : c.accentLight;
-  const alertIcon = (severity: AiAlert["severity"]) => severity === "critico" ? "alert-circle" as const : severity === "atencao" ? "warning-outline" as const : "information-circle-outline" as const;
+  const petStats = useMemo(() => {
+    const vacinas = pet?.vaccines ?? [];
+    const medicacoes = pet?.medications ?? [];
+    const alertas = risk?.alerts ?? [];
+    const vacinasEmDia = vacinas.filter((v) => v.done).length;
+
+    return {
+      vacinasEmDia,
+      vacinasPendentes: vacinas.length - vacinasEmDia,
+      totalVacinas: vacinas.length,
+      medicacoesAtivas: medicacoes.filter((m) => m.active).length,
+      totalAlertas: alertas.length,
+      alertasCriticos: alertas.filter((a) => a.severity === "critico").length,
+      alertasAtencao: alertas.filter((a) => a.severity === "atencao").length,
+    };
+  }, [pet, risk]);
+
+  const alertColor = (sev: AiAlert["severity"]) =>
+    sev === "critico" ? c.accentRed : sev === "atencao" ? c.accentOrange : c.accentLight;
+
+  const alertIcon = (sev: AiAlert["severity"]): IconName =>
+    sev === "critico"
+      ? "alert-circle"
+      : sev === "atencao"
+        ? "warning-outline"
+        : "information-circle-outline";
 
   const alertasVisiveis = (lastResult?.alerts ?? []).slice(0, 3);
-  const ultimaEhDaIa = messages.length > 0 && messages[messages.length - 1].role === "assistant";
+  const ultimaEhDaIa =
+    messages.length > 0 && messages[messages.length - 1].role === "assistant";
   const mostrarAlertas = !sending && ultimaEhDaIa && alertasVisiveis.length > 0;
 
-  const petImage = (pet as any)?.imageUri ?? (pet as any)?.photoUri ?? (pet as any)?.image ?? (pet as any)?.photo ?? null;
+  const petImage =
+    (pet as any)?.imageUri ??
+    (pet as any)?.photoUri ??
+    (pet as any)?.image ??
+    (pet as any)?.photo ??
+    null;
 
-  /* =========================================================
-     RENDER
-  ========================================================= */
+  const podeEnviar = input.trim().length > 0 && !sending;
 
-  return (
-    <KeyboardAvoidingView
-      style={s.safe}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
-    >
-      {/* =====================================================
-          MENU LATERAL (DRAWER) - ESTILO GEMINI
-      ====================================================== */}
-      {/* Fundo Escuro (Backdrop) */}
-      {isDrawerOpen && (
-        <TouchableWithoutFeedback onPress={() => setIsDrawerOpen(false)}>
-          <Animated.View style={[s.drawerBackdrop, { opacity: drawerAnim }]} />
-        </TouchableWithoutFeedback>
-      )}
+  /* ============================================================
+     SIDEBAR / DRAWER
+  ============================================================ */
 
-      {/* Painel Deslizante */}
-      <Animated.View
-        style={[
-          s.drawerContainer,
-          {
-            transform: [
-              {
-                translateX: drawerAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [-400, 0], // Vem da esquerda
-                }),
-              },
-            ],
-          },
-        ]}
+  const conteudoDrawer = (
+    <>
+      <ScrollView
+        contentContainerStyle={s.drawerScroll}
+        showsVerticalScrollIndicator={false}
       >
-        <ScrollView contentContainerStyle={s.drawerScroll} showsVerticalScrollIndicator={false}>
-          
-          {/* Drawer Header */}
-          <View style={s.drawerHeader}>
-            <View style={s.drawerLogoRow}>
-              <Ionicons name="sparkles" size={20} color={c.accentLight} style={{ marginRight: 8 }} />
-              <Text style={s.drawerLogoText}>Clyvo AI</Text>
-            </View>
-            <TouchableOpacity onPress={() => setIsDrawerOpen(false)} style={s.drawerCollapseBtn}>
-              <Ionicons name="tablet-landscape-outline" size={20} color={c.textSecondary} />
-            </TouchableOpacity>
+        <View style={s.drawerHeader}>
+          <View style={s.drawerLogoRow}>
+            <Ionicons name="sparkles" size={19} color={c.accentLight} />
+            <Text style={s.drawerLogoText}>Clyvo</Text>
           </View>
 
-          {/* Controle Segmentado */}
-          <View style={s.drawerSegmentedControl}>
-            <TouchableOpacity style={[s.drawerSegmentBtn, s.drawerSegmentBtnActive]}>
-              <Text style={s.drawerSegmentTextActive}>Conversa</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.drawerSegmentBtn}>
-              <Text style={s.drawerSegmentText}>Clínica</Text>
-              <View style={s.betaBadge}><Text style={s.betaBadgeText}>BETA</Text></View>
-            </TouchableOpacity>
-          </View>
-
-          {/* Links Principais */}
-          <View style={s.drawerMainLinks}>
-            <TouchableOpacity style={s.drawerMenuItem} onPress={() => { handleClearChat(); setIsDrawerOpen(false); }}>
-              <Ionicons name="create-outline" size={20} color={c.text} style={s.drawerMenuIcon} />
-              <Text style={s.drawerMenuText}>Nova conversa</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Ionicons name="search-outline" size={20} color={c.text} style={s.drawerMenuIcon} />
-              <Text style={s.drawerMenuText}>Pesquisar conversas</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Ionicons name="images-outline" size={20} color={c.text} style={s.drawerMenuIcon} />
-              <Text style={s.drawerMenuText}>Galeria do Pet</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Ionicons name="grid-outline" size={20} color={c.text} style={s.drawerMenuIcon} />
-              <Text style={s.drawerMenuText}>Biblioteca Médica</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Seção: Meus Pets (Simulando Notebooks) */}
-          <View style={s.drawerSection}>
-            <Text style={s.drawerSectionTitle}>Meus Pets</Text>
-            
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Ionicons name="add-outline" size={22} color={c.textSecondary} style={s.drawerMenuIcon} />
-              <Text style={s.drawerMenuText}>Adicionar pet</Text>
-            </TouchableOpacity>
-
-            {pets.map((p) => {
-              const isSelected = p.id === selectedPetId;
-              return (
-                <TouchableOpacity 
-                  key={p.id} 
-                  style={[s.drawerMenuItem, isSelected && s.drawerMenuItemActive]}
-                  onPress={() => {
-                    setSelectedPetId(p.id);
-                    setIsDrawerOpen(false);
-                  }}
-                >
-                  <Ionicons name="paw-outline" size={18} color={isSelected ? c.accentLight : c.textSecondary} style={s.drawerMenuIcon} />
-                  <Text style={[s.drawerMenuText, isSelected && s.drawerMenuTextActive]} numberOfLines={1}>
-                    Prontuário do(a) {p.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Seção: Recentes */}
-          <View style={s.drawerSection}>
-            <Text style={s.drawerSectionTitle}>Recentes</Text>
-            
-            {/* Lista simulada de conversas recentes */}
-            <TouchableOpacity style={[s.drawerMenuItem, s.drawerMenuItemActive]}>
-              <Text style={[s.drawerMenuText, s.drawerMenuTextActive]} numberOfLines={1}>Dúvida sobre vacinação...</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Text style={s.drawerMenuText} numberOfLines={1}>Ele está comendo menos</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Text style={s.drawerMenuText} numberOfLines={1}>Análise de Exame de Sangue</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Text style={s.drawerMenuText} numberOfLines={1}>Manchas na pele perto da orelha</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.drawerMenuItem}>
-              <Text style={s.drawerMenuText} numberOfLines={1}>Agendamento de Banho e Tosa</Text>
-            </TouchableOpacity>
-          </View>
-
-        </ScrollView>
-
-        {/* Rodapé do Drawer: Perfil do Usuário */}
-        <View style={s.drawerFooter}>
-          <View style={s.drawerProfileRow}>
-            <View style={s.drawerAvatar}>
-              <Text style={s.drawerAvatarText}>T</Text>
-            </View>
-            <View style={s.drawerProfileInfo}>
-              <Text style={s.drawerProfileName}>Tutor</Text>
-              <Text style={s.drawerProfilePlan}>Pro</Text>
-            </View>
-            <TouchableOpacity style={s.drawerSettingsBtn}>
-              <Ionicons name="settings-outline" size={22} color={c.textSecondary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Animated.View>
-      {/* ===================================================== */}
-
-
-      {/* HEADER */}
-      <View style={s.header}>
-        <View style={s.headerGlowOne} />
-        <View style={s.headerGlowTwo} />
-
-        {/* Substituído voltar pelo botão de Menu Hamburguer */}
-        <TouchableOpacity style={s.headerButton} onPress={() => setIsDrawerOpen(true)} activeOpacity={0.7}>
-          <Ionicons name="menu-outline" size={24} color={c.white} />
-        </TouchableOpacity>
-
-        <View style={s.avatarWrapper}>
-          <Animated.View style={[s.avatarGlow, { opacity: avatarGlow, transform: [{ scale: avatarPulse }] }]} />
-          <Animated.View style={[s.headerAvatar, { transform: [{ scale: avatarPulse }] }]}>
-            {petImage ? (
-              <Image source={{ uri: petImage }} style={s.petImage} />
-            ) : (
-              <Ionicons name="paw" size={21} color={c.white} />
-            )}
-            <View style={s.headerOnlineDot} />
-          </Animated.View>
-        </View>
-
-        <TouchableOpacity
-          style={s.headerInfo}
-          onPress={() => { setIsDrawerOpen(true); }} // Abrir o drawer também ao tocar no nome
-          activeOpacity={0.7}
-        >
-          <View style={s.headerNameRow}>
-            <Text style={s.headerTitle} numberOfLines={1}>
-              {pet ? pet.name : "Assistente Clyvo"}
-            </Text>
-            <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.75)" style={s.headerChevron} />
-            
-            <View style={s.aiBadge}>
-              <Ionicons name="sparkles" size={10} color={c.white} />
-              <Text style={s.aiBadgeText}>AI</Text>
-            </View>
-          </View>
-
-          <View style={s.onlineWrapper}>
-            <View style={s.onlineDot} />
-            <Text style={s.onlineText}>Clyvo online</Text>
-          </View>
-
-          {risk && (
-            <View style={s.riskWrapper}>
-              <View style={s.riskTrack}>
-                <Animated.View
-                  style={[
-                    s.riskFill,
-                    {
-                      backgroundColor: riskCor,
-                      width: riskAnim.interpolate({
-                        inputRange: [0, 100],
-                        outputRange: ["0%", "100%"],
-                        extrapolate: "clamp",
-                      }),
-                    },
-                  ]}
-                />
-              </View>
-              <Text style={[s.riskLabel, { color: riskCor }]}>risco {risk.riskLabel}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity style={s.headerButton} onPress={toggleTheme} activeOpacity={0.7}>
-          <Ionicons name={theme.isDark ? "sunny-outline" : "moon-outline"} size={19} color={c.white} />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[s.headerButton, s.headerOptionsButton]} onPress={() => { setShowQuickActions((current) => !current); }} activeOpacity={0.7}>
-          <Ionicons name="options-outline" size={20} color={c.white} />
-        </TouchableOpacity>
-      </View>
-
-      {/* PAINÉIS FLUTUANTES RÁPIDOS */}
-      {showQuickActions && (
-        <View style={s.quickActionsPanel}>
-          <View style={s.quickActionsHeader}>
-            <View>
-              <Text style={s.quickActionsTitle}>Central do Clyvo</Text>
-              <Text style={s.quickActionsSubtitle}>Ferramentas rápidas para cuidar do seu pet</Text>
-            </View>
-            <TouchableOpacity style={s.panelCloseButton} onPress={() => setShowQuickActions(false)}>
-              <Ionicons name="close" size={18} color={c.textSecondary} />
-            </TouchableOpacity>
-          </View>
-          <View style={s.quickActionsRow}>
-            {ACOES_RAPIDAS.map((acao) => (
-              <TouchableOpacity key={acao.action} style={s.quickActionCard} onPress={() => handleQuickAction(acao.action)} activeOpacity={0.82}>
-                <View style={s.quickActionIcon}>
-                  <Ionicons name={acao.icon} size={19} color={c.accentLight} />
-                </View>
-                <Text style={s.quickActionTitle}>{acao.title}</Text>
-                <Text style={s.quickActionSubtitle}>{acao.subtitle}</Text>
-                <Ionicons name="chevron-forward" size={15} color={c.accentLight} style={s.quickActionArrow} />
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={[s.quickActionCard, s.triageActionCard]} onPress={() => setShowTriage(true)} activeOpacity={0.82}>
-              <View style={s.quickActionIcon}>
-                <Ionicons name="pulse-outline" size={19} color={c.accentLight} />
-              </View>
-              <Text style={s.quickActionTitle}>Triagem</Text>
-              <Text style={s.quickActionSubtitle}>Iniciar</Text>
-              <Ionicons name="chevron-forward" size={15} color={c.accentLight} style={s.quickActionArrow} />
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {showTriage && (
-        <Animated.View style={[s.triagePanel, { opacity: triageAnimation, transform: [{ translateY: triageAnimation.interpolate({ inputRange: [0, 1], outputRange: [-15, 0] }) }] }]}>
-          <View style={s.triageHeader}>
-            <View>
-              <View style={s.triageTitleRow}>
-                <View style={s.triagePulse}>
-                  <Ionicons name="pulse" size={17} color={c.white} />
-                </View>
-                <Text style={s.triageTitle}>Modo Triagem</Text>
-              </View>
-              <Text style={s.triageSubtitle}>O que está acontecendo com o pet?</Text>
-            </View>
-            <TouchableOpacity style={s.panelCloseButton} onPress={() => setShowTriage(false)}>
-              <Ionicons name="close" size={18} color={c.textSecondary} />
-            </TouchableOpacity>
-          </View>
-          <View style={s.triageGrid}>
-            <TouchableOpacity style={s.triageItem} onPress={() => handleTriage("vomitando")} activeOpacity={0.8}>
-              <Text style={s.triageEmoji}>🤢</Text>
-              <Text style={s.triageItemText}>Vômito</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.triageItem} onPress={() => handleTriage("com diarreia")} activeOpacity={0.8}>
-              <Text style={s.triageEmoji}>💧</Text>
-              <Text style={s.triageItemText}>Diarreia</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.triageItem} onPress={() => handleTriage("sem querer comer")} activeOpacity={0.8}>
-              <Text style={s.triageEmoji}>🍖</Text>
-              <Text style={s.triageItemText}>Apetite</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.triageItem} onPress={() => handleTriage("com dor")} activeOpacity={0.8}>
-              <Text style={s.triageEmoji}>🩹</Text>
-              <Text style={s.triageItemText}>Dor</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      )}
-
-      {urgente && lastResult && (
-        <View style={[s.banner, emergencia ? s.bannerCritico : s.bannerAlerta]}>
-          <View style={s.bannerIcon}>
-            <Ionicons name={emergencia ? "warning" : "alert-circle"} size={19} color={c.white} />
-          </View>
-          <View style={s.bannerContent}>
-            <Text style={s.bannerTitle}>{emergencia ? "Atenção imediata" : "Atenção recomendada"}</Text>
-            <Text style={s.bannerText}>
-              {emergencia ? "O relato pode indicar uma situação que exige atendimento veterinário imediato." : "Pode ser importante avaliar o pet nas próximas 24 a 48 horas."}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={s.bannerAction}
-            onPress={() => Alert.alert("Atendimento veterinário", "Procure uma clínica veterinária de confiança ou serviço de emergência da sua região.", [{ text: "OK" }])}
+          <Pressable
+            onPress={() =>
+              sidebarFixa ? setSidebarVisivel(false) : setDrawerAberto(false)
+            }
+            style={s.drawerIconBtn}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Fechar menu"
           >
-            <Ionicons name="information-circle-outline" size={19} color={c.white} />
-          </TouchableOpacity>
+            <Ionicons
+              name={sidebarFixa ? "chevron-back" : "close"}
+              size={20}
+              color={c.textSecondary}
+            />
+          </Pressable>
         </View>
-      )}
 
-      {/* CHAT CONTAINER */}
-      <View style={s.chatContainer}>
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={s.messagesList}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-        >
-          {messages.length === 0 && (
-            <Animated.View style={[s.welcomeContainer, { opacity: welcomeOpacity, transform: [{ scale: welcomeScale }] }]}>
-              <View style={s.heroArea}>
-                <View style={s.heroOrbitOne} />
-                <View style={s.heroOrbitTwo} />
-                <View style={s.heroAvatar}>
-                  {petImage ? (
-                    <Image source={{ uri: petImage }} style={s.heroPetImage} />
-                  ) : (
-                    <Ionicons name="sparkles" size={34} color={c.accentLight} />
-                  )}
-                </View>
-                <View style={s.heroSparkle}>
-                  <Ionicons name="sparkles" size={12} color={c.white} />
-                </View>
-                <View style={s.heroOnline}>
-                  <View style={s.heroOnlineDot} />
-                  <Text style={s.heroOnlineText}>ONLINE</Text>
-                </View>
-              </View>
+        <View style={s.drawerSegmented}>
+          <Pressable style={[s.drawerSegmentBtn, s.drawerSegmentBtnAtivo]}>
+            <Text style={s.drawerSegmentTextAtivo}>Conversa</Text>
+          </Pressable>
+          <Pressable style={s.drawerSegmentBtn}>
+            <Text style={s.drawerSegmentText}>Clínica</Text>
+            <View style={s.betaBadge}>
+              <Text style={s.betaBadgeText}>Beta</Text>
+            </View>
+          </Pressable>
+        </View>
 
-              <Text style={s.welcomeBadge}>CLYVO AI</Text>
-              <Text style={s.welcomeTitle}>Olá! Eu sou o Clyvo 👋</Text>
-              <Text style={s.welcomeSubtitle}>
-                Seu assistente inteligente para cuidar da saúde {pet ? `de ${pet.name}` : "do seu pet"} com mais praticidade.
-              </Text>
+        <View style={s.drawerBloco}>
+          <Pressable
+            style={s.drawerItem}
+            onPress={() => {
+              handleClearChat();
+              if (!sidebarFixa) setDrawerAberto(false);
+            }}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name="create-outline"
+              size={19}
+              color={c.text}
+              style={s.drawerItemIcon}
+            />
+            <Text style={s.drawerItemText}>Nova conversa</Text>
+          </Pressable>
 
-              <View style={s.trustRow}>
-                <View style={s.trustItem}><Ionicons name="shield-checkmark" size={13} color={c.accentGreen} /><Text style={s.trustText}>Histórico</Text></View>
-                <View style={s.trustDivider} />
-                <View style={s.trustItem}><Ionicons name="flash" size={13} color={c.accentLight} /><Text style={s.trustText}>Respostas rápidas</Text></View>
-                <View style={s.trustDivider} />
-                <View style={s.trustItem}><Ionicons name="paw" size={13} color={c.accentLight} /><Text style={s.trustText}>Pet care</Text></View>
-              </View>
+          <Pressable style={s.drawerItem} accessibilityRole="button">
+            <Ionicons
+              name="search-outline"
+              size={19}
+              color={c.text}
+              style={s.drawerItemIcon}
+            />
+            <Text style={s.drawerItemText}>Pesquisar conversas</Text>
+          </Pressable>
 
-              <View style={s.welcomeInfo}>
-                <View style={s.infoIcon}>
-                  <Ionicons name="sparkles-outline" size={19} color={c.accentLight} />
-                </View>
-                <View style={s.infoContent}>
-                  <Text style={s.infoTitle}>Assistência inteligente</Text>
-                  <Text style={s.infoText}>O Clyvo usa as informações disponíveis do seu pet como contexto da conversa.</Text>
-                </View>
-                <View style={s.infoStatus}><View style={s.infoStatusDot} /></View>
-              </View>
+          <Pressable style={s.drawerItem} accessibilityRole="button">
+            <Ionicons
+              name="images-outline"
+              size={19}
+              color={c.text}
+              style={s.drawerItemIcon}
+            />
+            <Text style={s.drawerItemText}>Galeria do pet</Text>
+          </Pressable>
 
-              <TouchableOpacity style={s.triageLaunch} onPress={() => setShowTriage(true)} activeOpacity={0.82}>
-                <View style={s.triageLaunchIcon}><Ionicons name="pulse" size={20} color={c.white} /></View>
-                <View style={s.triageLaunchContent}>
-                  <Text style={s.triageLaunchTitle}>Iniciar uma triagem</Text>
-                  <Text style={s.triageLaunchText}>Vamos entender os sintomas</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={c.white} />
-              </TouchableOpacity>
+          <Pressable style={s.drawerItem} accessibilityRole="button">
+            <Ionicons
+              name="library-outline"
+              size={19}
+              color={c.text}
+              style={s.drawerItemIcon}
+            />
+            <Text style={s.drawerItemText}>Biblioteca médica</Text>
+          </Pressable>
+        </View>
 
-              {showSuggestions && (
-                <View style={s.suggestionsContainer}>
-                  <View style={s.suggestionsHeader}>
-                    <View>
-                      <Text style={s.suggestionsTitle}>Experimente perguntar</Text>
-                      <Text style={s.suggestionsSubtitle}>Perguntas rápidas para começar</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => setShowSuggestions(false)} style={s.closeSuggestion}>
-                      <Ionicons name="close" size={17} color={c.textSecondary} />
-                    </TouchableOpacity>
-                  </View>
-                  {SUGESTOES.map((sugestao, index) => (
-                    <TouchableOpacity
-                      key={sugestao.text}
-                      style={[s.suggestionCard, index === 0 && s.suggestionCardHighlight]}
-                      onPress={() => handleSend(sugestao.text)}
-                      activeOpacity={0.78}
-                    >
-                      <View style={s.suggestionIcon}><Ionicons name={sugestao.icon} size={18} color={c.accentLight} /></View>
-                      <Text style={s.suggestionText}>{sugestao.text}</Text>
-                      <View style={s.suggestionArrow}><Ionicons name="arrow-up" size={15} color={c.accentLight} /></View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </Animated.View>
-          )}
+        <View style={s.drawerBloco}>
+          <Text style={s.drawerSectionTitle}>Meus pets</Text>
 
-          {messages.map((msg, index) => {
-            const isUser = msg.role === "user";
+          {pets.map((p) => {
+            const ativo = p.id === (selectedPetId ?? pet?.id);
             return (
-              <AnimatedMessage key={index} isUser={isUser}>
-                <View style={[s.messageRow, isUser ? s.messageRowUser : s.messageRowAi]}>
-                  {!isUser && (
-                    <View style={s.messageAvatar}>
-                      <Ionicons name="sparkles" size={14} color={c.white} />
-                    </View>
-                  )}
-
-                  <View style={[s.messageContent, isUser ? s.messageContentUser : s.messageContentAi]}>
-                    <View style={[s.messageLabelRow, isUser && s.messageLabelRowUser]}>
-                      {!isUser && <Text style={s.messageLabel}>Clyvo AI</Text>}
-                      {isUser && <Text style={s.messageLabelUser}>Você</Text>}
-                    </View>
-
-                    <View style={isUser ? s.userBubble : s.aiBubble}>
-                      {isUser ? (
-                        <Text style={s.userText}>{msg.content}</Text>
-                      ) : (
-                        <>
-                          {index === messages.length - 1 && lastResult && (
-                            <View style={[s.triageTag, { backgroundColor: `${urgencyMeta(lastResult.urgency).cor}1A`, borderColor: urgencyMeta(lastResult.urgency).cor }]}>
-                              <Ionicons name={urgencyMeta(lastResult.urgency).icone} size={12} color={urgencyMeta(lastResult.urgency).cor} />
-                              <Text style={[s.triageTagText, { color: urgencyMeta(lastResult.urgency).cor }]}>{urgencyMeta(lastResult.urgency).rotulo}</Text>
-                            </View>
-                          )}
-                          <RichText
-                            content={index === streamIndexRef.current ? streamedText || msg.content : msg.content}
-                            style={s.aiText}
-                            accentColor={c.accentLight}
-                            codeBackground={theme.tint(0.12)}
-                          />
-                          {index === streamIndexRef.current && streamedText.length < msg.content.length && (
-                            <View style={s.cursor} />
-                          )}
-                        </>
-                      )}
-                    </View>
-
-                    {!isUser && (
-                      <View style={s.messageActions}>
-                        <TouchableOpacity style={s.messageAction} onPress={() => handleFeedback(index, "like")}>
-                          <Ionicons name={likedMessages[index] === "like" ? "thumbs-up" : "thumbs-up-outline"} size={14} color={likedMessages[index] === "like" ? c.accentLight : c.textSecondary} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={s.messageAction} onPress={() => handleFeedback(index, "dislike")}>
-                          <Ionicons name={likedMessages[index] === "dislike" ? "thumbs-down" : "thumbs-down-outline"} size={14} color={likedMessages[index] === "dislike" ? c.accentLight : c.textSecondary} />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={s.messageAction} onPress={() => handleShare(msg.content)}>
-                          <Ionicons name="share-outline" size={14} color={c.textSecondary} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-
-                  {isUser && (
-                    <View style={s.userAvatar}>
-                      <Ionicons name="person" size={14} color={c.white} />
-                    </View>
-                  )}
-                </View>
-              </AnimatedMessage>
+              <Pressable
+                key={p.id}
+                style={[s.drawerItem, ativo && s.drawerItemAtivo]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: ativo }}
+                onPress={() => {
+                  setSelectedPetId(p.id);
+                  if (!sidebarFixa) setDrawerAberto(false);
+                }}
+              >
+                <Ionicons
+                  name="paw-outline"
+                  size={18}
+                  color={ativo ? c.accentLight : c.textSecondary}
+                  style={s.drawerItemIcon}
+                />
+                <Text
+                  style={[s.drawerItemText, ativo && s.drawerItemTextAtivo]}
+                  numberOfLines={1}
+                >
+                  {p.name}
+                </Text>
+              </Pressable>
             );
           })}
 
-          {!sending && ultimaEhDaIa && (lastResult?.sources?.length ?? 0) > 0 && (
-            <AnimatedMessage isUser={false}>
-              <View style={s.sourcesRow}>
-                <Ionicons name="library-outline" size={12} color={c.textSecondary} />
-                {(lastResult?.sources ?? []).slice(0, 3).map((fonte) => (
-                  <View key={fonte} style={s.sourceChip}>
-                    <Text style={s.sourceChipText} numberOfLines={1}>{fonte.split("—").pop()?.trim() ?? fonte}</Text>
-                  </View>
-                ))}
-              </View>
-            </AnimatedMessage>
-          )}
+          <Pressable style={s.drawerItem} accessibilityRole="button">
+            <Ionicons
+              name="add"
+              size={20}
+              color={c.textSecondary}
+              style={s.drawerItemIcon}
+            />
+            <Text style={s.drawerItemText}>Adicionar pet</Text>
+          </Pressable>
+        </View>
 
-          {mostrarAlertas && (
-            <AnimatedMessage isUser={false}>
-              <View style={s.alertsBlock}>
-                <Text style={s.alertsLabel}>DO PRONTUÁRIO {pet ? `DE ${pet.name.toUpperCase()}` : ""}</Text>
-                {alertasVisiveis.map((alerta) => (
-                  <View key={alerta.code + alerta.title} style={[s.alertChip, { borderLeftColor: alertColor(alerta.severity) }]}>
-                    <Ionicons name={alertIcon(alerta.severity)} size={15} color={alertColor(alerta.severity)} />
-                    <View style={s.alertChipContent}>
-                      <Text style={s.alertChipTitle}>{alerta.title}</Text>
-                      <Text style={s.alertChipDetail} numberOfLines={2}>{alerta.detail}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </AnimatedMessage>
-          )}
+        <View style={s.drawerBloco}>
+          <Text style={s.drawerSectionTitle}>Recentes</Text>
+          {CONVERSAS_RECENTES.map((titulo, i) => (
+            <Pressable
+              key={titulo}
+              style={[s.drawerItem, i === 0 && s.drawerItemAtivo]}
+              accessibilityRole="button"
+            >
+              <Text
+                style={[s.drawerItemText, i === 0 && s.drawerItemTextAtivo]}
+                numberOfLines={1}
+              >
+                {titulo}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </ScrollView>
 
-          {destino && !sending && (
-            <AnimatedMessage isUser={false}>
-              <TouchableOpacity style={s.cta} onPress={() => navigation.navigate(destino as never)} activeOpacity={0.82}>
-                <View style={s.ctaIcon}>
-                  <Ionicons name={lastResult?.suggestedAction === "atualizar_vacina" ? "medkit-outline" : "calendar-outline"} size={19} color={c.accentLight} />
-                </View>
-                <View style={s.ctaContent}>
-                  <Text style={s.ctaEyebrow}>RECOMENDADO PELO CLYVO</Text>
-                  <Text style={s.ctaTitle}>{lastResult?.suggestedAction === "atualizar_vacina" ? "Carteira de vacinas" : "Agenda de saúde"}</Text>
-                  <Text style={s.ctaDescription}>Acesse diretamente este recurso</Text>
-                </View>
-                <View style={s.ctaArrow}>
-                  <Ionicons name="chevron-forward" size={20} color={c.white} />
-                </View>
-              </TouchableOpacity>
-            </AnimatedMessage>
-          )}
+      <View style={s.drawerFooter}>
+        <View style={s.drawerAvatar}>
+          <Text style={s.drawerAvatarText}>T</Text>
+        </View>
+        <View style={s.drawerPerfilInfo}>
+          <Text style={s.drawerPerfilNome}>Tutor</Text>
+          <Text style={s.drawerPerfilPlano}>Plano Pro</Text>
+        </View>
+        <Pressable
+          style={s.drawerIconBtn}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Configurações"
+        >
+          <Ionicons name="settings-outline" size={20} color={c.textSecondary} />
+        </Pressable>
+      </View>
+    </>
+  );
 
-          {sending && (
-            <View style={s.typingRow}>
-              <View style={s.messageAvatar}>
-                <Ionicons name="sparkles" size={14} color={c.white} />
-              </View>
-              <View style={s.skeletonBubble}>
-                <View style={s.skeletonHeader}>
-                  <View style={s.typingDots}>
-                    <Animated.View style={[s.typingDot, { opacity: typingAnimation.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.35, 1, 0.35] }) }]} />
-                    <Animated.View style={[s.typingDot, { opacity: typingAnimation.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 0.35, 1] }) }]} />
-                    <Animated.View style={[s.typingDot, { opacity: typingAnimation.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.35, 1, 0.35] }) }]} />
-                  </View>
-                  <Text style={s.typingText}>Consultando o histórico do pet...</Text>
+  /* ============================================================
+     BLOCO DE BOAS-VINDAS
+  ============================================================ */
+
+  const boasVindas = (
+    <Animated.View
+      style={[
+        s.welcomeContainer,
+        { opacity: welcomeOpacity, transform: [{ scale: welcomeScale }] },
+      ]}
+    >
+      {!r.isShort && (
+        <View style={s.heroArea}>
+          <Animated.View
+            style={[s.heroGlowBackdrop, { opacity: avatarGlow }]}
+            pointerEvents="none"
+          />
+          <View style={s.heroOrbitThree} />
+          <View style={s.heroOrbitTwo} />
+          <View style={s.heroOrbitOne} />
+          <Animated.View
+            style={[s.heroAvatar, { transform: [{ scale: avatarPulse }] }]}
+          >
+            {petImage ? (
+              <Image source={{ uri: petImage }} style={s.heroPetImage} />
+            ) : (
+              <Ionicons name="sparkles" size={r.fs(38)} color={c.accentLight} />
+            )}
+          </Animated.View>
+          <View style={s.heroSparkle}>
+            <Ionicons name="sparkles" size={12} color={c.white} />
+          </View>
+        </View>
+      )}
+
+      <Text style={s.welcomeTitle}>
+        {pet ? `Oi! Vamos falar do ${pet.name}?` : "Oi! Eu sou o Clyvo"}
+      </Text>
+      <Text style={s.welcomeSubtitle}>
+        Pergunte sobre vacinas, sintomas ou rotina.{" "}
+        {pet
+          ? `Eu consulto o histórico do ${pet.name} antes de responder.`
+          : "Cadastre um pet para respostas personalizadas."}
+      </Text>
+
+      <View style={s.trustRow}>
+        <View style={s.trustItem}>
+          <Ionicons name="shield-checkmark" size={13} color={c.accentGreen} />
+          <Text style={s.trustText}>Usa o histórico</Text>
+        </View>
+        <View style={s.trustDivider} />
+        <View style={s.trustItem}>
+          <Ionicons name="flash" size={13} color={c.accentLight} />
+          <Text style={s.trustText}>Resposta imediata</Text>
+        </View>
+      </View>
+
+      <Pressable
+        style={({ pressed }) => [s.triageLaunch, pressed && s.pressed]}
+        onPress={() => setShowTriage(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Iniciar triagem de sintomas"
+      >
+        <View style={s.triageLaunchIcon}>
+          <Ionicons name="pulse" size={20} color={c.white} />
+        </View>
+        <View style={s.triageLaunchContent}>
+          <Text style={s.triageLaunchTitle}>Iniciar uma triagem</Text>
+          <Text style={s.triageLaunchText}>
+            Descreva o sintoma e eu avalio a urgência
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={c.white} />
+      </Pressable>
+
+      {showSuggestions && (
+        <View style={s.suggestionsContainer}>
+          <View style={s.suggestionsHeader}>
+            <Text style={s.suggestionsTitle}>Comece por aqui</Text>
+            <Pressable
+              onPress={() => setShowSuggestions(false)}
+              style={s.drawerIconBtn}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Ocultar sugestões"
+            >
+              <Ionicons name="close" size={17} color={c.textSecondary} />
+            </Pressable>
+          </View>
+
+          <View style={s.suggestionsGrid}>
+            {SUGESTOES.map((sug) => (
+              <Pressable
+                key={sug.text}
+                style={({ pressed }) => [s.suggestionCard, pressed && s.pressed]}
+                onPress={() => handleSend(sug.text)}
+                accessibilityRole="button"
+              >
+                <View style={s.suggestionIcon}>
+                  <Ionicons name={sug.icon} size={18} color={c.accentLight} />
                 </View>
-                {[0.92, 0.78, 0.55].map((largura, indice) => (
+                <Text style={s.suggestionText}>{sug.text}</Text>
+                <Ionicons
+                  name="arrow-forward"
+                  size={15}
+                  color={c.accentLight}
+                  style={s.suggestionArrow}
+                />
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      )}
+    </Animated.View>
+  );
+
+  /* ============================================================
+     RODAPÉ DA LISTA (fontes, alertas, CTA, digitando)
+  ============================================================ */
+
+  const rodapeLista = (
+    <View>
+      {!sending && ultimaEhDaIa && (lastResult?.sources?.length ?? 0) > 0 && (
+        <View style={s.sourcesRow}>
+          <Ionicons name="library-outline" size={12} color={c.textSecondary} />
+          {(lastResult?.sources ?? []).slice(0, 3).map((fonte) => (
+            <View key={fonte} style={s.sourceChip}>
+              <Text style={s.sourceChipText} numberOfLines={1}>
+                {fonte.split("—").pop()?.trim() ?? fonte}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {mostrarAlertas && (
+        <View style={s.alertsBlock}>
+          <Text style={s.alertsLabel}>
+            {pet ? `Do prontuário do ${pet.name}` : "Do prontuário"}
+          </Text>
+          {alertasVisiveis.map((a) => (
+            <View
+              key={a.code + a.title}
+              style={[s.alertChip, { borderLeftColor: alertColor(a.severity) }]}
+            >
+              <Ionicons
+                name={alertIcon(a.severity)}
+                size={15}
+                color={alertColor(a.severity)}
+              />
+              <View style={s.alertChipContent}>
+                <Text style={s.alertChipTitle}>{a.title}</Text>
+                <Text style={s.alertChipDetail}>{a.detail}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {destino && !sending && (
+        <Pressable
+          style={({ pressed }) => [s.cta, pressed && s.pressed]}
+          onPress={() => navigation.navigate(destino as never)}
+          accessibilityRole="button"
+        >
+          <View style={s.ctaIcon}>
+            <Ionicons
+              name={
+                lastResult?.suggestedAction === "atualizar_vacina"
+                  ? "medkit-outline"
+                  : "calendar-outline"
+              }
+              size={19}
+              color={c.accentLight}
+            />
+          </View>
+          <View style={s.ctaContent}>
+            <Text style={s.ctaTitle}>
+              {lastResult?.suggestedAction === "atualizar_vacina"
+                ? "Abrir carteira de vacinas"
+                : "Abrir agenda de saúde"}
+            </Text>
+            <Text style={s.ctaDescription}>Sugerido a partir desta conversa</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={c.accentLight} />
+        </Pressable>
+      )}
+
+      {sending && (
+        <View style={s.typingRow}>
+          <View style={s.messageAvatar}>
+            <Ionicons name="sparkles" size={14} color={c.white} />
+          </View>
+          <View style={s.skeletonBubble}>
+            <View style={s.skeletonHeader}>
+              <View style={s.typingDots}>
+                {[0, 1, 2].map((i) => (
                   <Animated.View
-                    key={indice}
+                    key={i}
                     style={[
-                      s.skeletonLine,
-                      { width: `${largura * 100}%`, opacity: typingAnimation.interpolate({ inputRange: [0, 0.5, 1], outputRange: indice % 2 === 0 ? [0.25, 0.6, 0.25] : [0.6, 0.25, 0.6] }) }
+                      s.typingDot,
+                      {
+                        opacity: typingAnim.interpolate({
+                          inputRange: [0, 0.5, 1],
+                          outputRange:
+                            i === 1 ? [1, 0.3, 1] : [0.3, 1, 0.3],
+                        }),
+                      },
                     ]}
                   />
                 ))}
               </View>
+              <Text style={s.typingText}>
+                {pet ? `Consultando o histórico do ${pet.name}` : "Pensando"}
+              </Text>
             </View>
-          )}
-        </ScrollView>
 
-        <Animated.View style={{ opacity: scrollBtnAnim, position: 'absolute', right: 16, bottom: 17, transform: [{ scale: scrollBtnAnim }] }}>
-          <TouchableOpacity style={s.scrollButton} onPress={scrollToBottom} activeOpacity={0.85}>
-            <Ionicons name="arrow-down" size={18} color={c.white} />
-          </TouchableOpacity>
-        </Animated.View>
+            {[0.92, 0.78, 0.55].map((larg, i) => (
+              <Animated.View
+                key={i}
+                style={[
+                  s.skeletonLine,
+                  {
+                    width: `${larg * 100}%`,
+                    opacity: typingAnim.interpolate({
+                      inputRange: [0, 0.5, 1],
+                      outputRange: i % 2 === 0 ? [0.2, 0.5, 0.2] : [0.5, 0.2, 0.5],
+                    }),
+                  },
+                ]}
+              />
+            ))}
+          </View>
+        </View>
+      )}
+    </View>
+  );
+
+  /* ============================================================
+     PAINEL DE NÚMEROS DO PET
+  ============================================================ */
+
+  const cartoesPet: {
+    icon: IconName;
+    cor: string;
+    valor: string;
+    label: string;
+    sub: string;
+  }[] = [
+    {
+      icon: "pulse",
+      cor: riskCor,
+      valor: risk ? `${risk.riskScore}` : "—",
+      label: "Risco atual",
+      sub: risk ? `Nível ${risk.riskLabel}` : "Sem avaliação",
+    },
+    {
+      icon: "medkit",
+      cor: c.accentGreen,
+      valor: `${petStats.vacinasEmDia}/${petStats.totalVacinas}`,
+      label: "Vacinas em dia",
+      sub:
+        petStats.vacinasPendentes > 0
+          ? `${petStats.vacinasPendentes} pendente(s)`
+          : "Nenhuma pendência",
+    },
+    {
+      icon: "fitness",
+      cor: c.accentLight,
+      valor: `${petStats.medicacoesAtivas}`,
+      label: "Medicações ativas",
+      sub: petStats.medicacoesAtivas > 0 ? "Em uso agora" : "Nenhuma em uso",
+    },
+    {
+      icon: "warning",
+      cor: petStats.alertasCriticos > 0 ? c.accentRed : c.accentOrange,
+      valor: `${petStats.totalAlertas}`,
+      label: "Alertas ativos",
+      sub:
+        petStats.totalAlertas > 0
+          ? `${petStats.alertasCriticos} crítico(s), ${petStats.alertasAtencao} atenção`
+          : "Tudo tranquilo",
+    },
+  ];
+
+  const painelNumerosPet = (
+    <View style={s.statsPanelInner}>
+      <View style={s.statsPanelHeader}>
+        <View>
+          <Text style={s.statsPanelTitle}>
+            {pet ? `Números do ${pet.name}` : "Números do pet"}
+          </Text>
+          <Text style={s.statsPanelSubtitle}>
+            {pet?.species || pet?.breed
+              ? [pet.species, pet.breed].filter(Boolean).join(" · ")
+              : "Selecione um pet"}
+          </Text>
+        </View>
+        {!(r.statsPanelWidth > 0) && (
+          <Pressable
+            style={s.drawerIconBtn}
+            hitSlop={10}
+            onPress={() => setShowPetStats(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Fechar números do pet"
+          >
+            <Ionicons name="close" size={18} color={c.textSecondary} />
+          </Pressable>
+        )}
       </View>
 
-      {/* INPUT */}
-      <View style={s.inputBar}>
-        <TouchableOpacity style={s.plusButton} onPress={() => { setShowQuickActions((current) => !current); }} activeOpacity={0.82}>
-          <Ionicons name={showQuickActions ? "close" : "add"} size={22} color={c.accentLight} />
-        </TouchableOpacity>
+      <View style={s.statsPanelInfoRow}>
+        <View style={s.statsPanelInfoItem}>
+          <Text style={s.statsPanelInfoLabel}>Idade</Text>
+          <Text style={s.statsPanelInfoValue}>{pet?.age || "—"}</Text>
+        </View>
+        <View style={s.statsPanelInfoItem}>
+          <Text style={s.statsPanelInfoLabel}>Peso</Text>
+          <Text style={s.statsPanelInfoValue}>{pet?.weight || "—"}</Text>
+        </View>
+        <View style={s.statsPanelInfoItem}>
+          <Text style={s.statsPanelInfoLabel}>Checkup</Text>
+          <Text style={s.statsPanelInfoValue} numberOfLines={1}>
+            {pet?.nextCheckup || "—"}
+          </Text>
+        </View>
+      </View>
 
-        <View style={s.inputContainer}>
-          <TextInput
-            style={s.input}
-            placeholder="Pergunte ao Clyvo..."
-            placeholderTextColor={c.textSecondary}
-            value={input}
-            onChangeText={setInput}
-            multiline
-            maxLength={1000}
-            returnKeyType="send"
-            blurOnSubmit={false}
-            onFocus={() => setInputFocused(true)}
-            onBlur={() => setInputFocused(false)}
-            onKeyPress={({ nativeEvent }) => { if (nativeEvent.key === "Enter") handleSend(); }}
-            onSubmitEditing={() => handleSend()}
+      <View style={s.statsCardsWrap}>
+        {cartoesPet.map((card) => (
+          <View key={card.label} style={s.statCard}>
+            <View style={[s.statCardIcon, { backgroundColor: `${card.cor}22` }]}>
+              <Ionicons name={card.icon} size={16} color={card.cor} />
+            </View>
+            <Text style={s.statCardValue}>{card.valor}</Text>
+            <Text style={s.statCardLabel}>{card.label}</Text>
+            <Text style={s.statCardSub} numberOfLines={1}>
+              {card.sub}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+
+  /* ============================================================
+     RENDER
+  ============================================================ */
+
+  const renderItem = useCallback(
+    ({ item, index }: { item: ChatMessage; index: number }) => {
+      const ehUltima = index === messages.length - 1;
+      const emStream = index === streamIndexRef.current;
+
+      return (
+        <Bolha
+          msg={item}
+          index={index}
+          s={s}
+          theme={theme}
+          texto={emStream ? streamedText || item.content : item.content}
+          mostrarCursor={emStream && streamedText.length < item.content.length}
+          tagUrgencia={
+            ehUltima && item.role === "assistant" && lastResult
+              ? urgencyMeta(lastResult.urgency)
+              : null
+          }
+          feedback={feedbacks[index]}
+          onFeedback={handleFeedback}
+          onShare={handleShare}
+          semAnimacao={reduceMotion}
+        />
+      );
+    },
+    [
+      messages.length,
+      s,
+      theme,
+      streamedText,
+      lastResult,
+      urgencyMeta,
+      feedbacks,
+      handleFeedback,
+      handleShare,
+      reduceMotion,
+    ],
+  );
+
+  return (
+    <View style={s.root}>
+      {/* ---------- SIDEBAR FIXA (tablet deitado) ---------- */}
+      {sidebarFixa && sidebarVisivel && (
+        <View style={s.sidebarFixa}>{conteudoDrawer}</View>
+      )}
+
+      {/* ---------- COLUNA PRINCIPAL ---------- */}
+      <KeyboardAvoidingView
+        style={s.mainColumn}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={0}
+      >
+        {/* HEADER */}
+        <View style={s.header}>
+          <View style={s.headerGlowOne} pointerEvents="none" />
+          <View style={s.headerGlowTwo} pointerEvents="none" />
+
+          {(!sidebarFixa || !sidebarVisivel) && (
+            <Pressable
+              style={({ pressed }) => [s.headerButton, pressed && s.pressed]}
+              onPress={() =>
+                sidebarFixa ? setSidebarVisivel(true) : setDrawerAberto(true)
+              }
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Abrir menu"
+            >
+              <Ionicons name="menu" size={22} color={c.white} />
+            </Pressable>
+          )}
+
+          <View style={s.avatarWrapper}>
+            <Animated.View
+              style={[
+                s.avatarGlow,
+                { opacity: avatarGlow, transform: [{ scale: avatarPulse }] },
+              ]}
+              pointerEvents="none"
+            />
+            <Animated.View
+              style={[s.headerAvatar, { transform: [{ scale: avatarPulse }] }]}
+            >
+              {petImage ? (
+                <Image source={{ uri: petImage }} style={s.petImage} />
+              ) : (
+                <Ionicons name="paw" size={20} color={c.white} />
+              )}
+              <View style={s.headerOnlineDot} />
+            </Animated.View>
+          </View>
+
+          <Pressable
+            style={s.headerInfo}
+            onPress={() =>
+              sidebarFixa ? setSidebarVisivel(true) : setDrawerAberto(true)
+            }
+            accessibilityRole="button"
+            accessibilityLabel="Trocar de pet"
+          >
+            <View style={s.headerNameRow}>
+              <Text style={s.headerTitle} numberOfLines={1}>
+                {pet ? pet.name : "Clyvo"}
+              </Text>
+              <View style={s.aiBadge}>
+                <Ionicons name="sparkles" size={9} color={c.white} />
+                <Text style={s.aiBadgeText}>IA</Text>
+              </View>
+            </View>
+
+            {risk && !r.isShort ? (
+              <View style={s.riskWrapper}>
+                <View style={s.riskTrack}>
+                  <Animated.View
+                    style={[
+                      s.riskFill,
+                      {
+                        backgroundColor: riskCor,
+                        width: riskAnim.interpolate({
+                          inputRange: [0, 100],
+                          outputRange: ["0%", "100%"],
+                          extrapolate: "clamp",
+                        }),
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={[s.riskLabel, { color: riskCor }]} numberOfLines={1}>
+                  risco {risk.riskLabel}
+                </Text>
+              </View>
+            ) : (
+              <View style={s.onlineWrapper}>
+                <View style={s.onlineDot} />
+                <Text style={s.onlineText}>online</Text>
+              </View>
+            )}
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [s.headerButton, pressed && s.pressed]}
+            onPress={fala.alternarVoz}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={
+              fala.vozAtiva ? "Desativar respostas em voz" : "Ativar respostas em voz"
+            }
+            accessibilityState={{ selected: fala.vozAtiva }}
+          >
+            <Ionicons
+              name={
+                fala.falando
+                  ? "volume-high"
+                  : fala.vozAtiva
+                    ? "volume-medium-outline"
+                    : "volume-mute-outline"
+              }
+              size={19}
+              color={c.white}
+            />
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              s.headerButton,
+              s.headerButtonGap,
+              pressed && s.pressed,
+            ]}
+            onPress={toggleTheme}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={
+              theme.isDark ? "Usar tema claro" : "Usar tema escuro"
+            }
+          >
+            <Ionicons
+              name={theme.isDark ? "sunny-outline" : "moon-outline"}
+              size={19}
+              color={c.white}
+            />
+          </Pressable>
+
+          {!(r.statsPanelWidth > 0) && (
+            <Pressable
+              style={({ pressed }) => [
+                s.headerButton,
+                s.headerButtonGap,
+                pressed && s.pressed,
+              ]}
+              onPress={() => setShowPetStats((v) => !v)}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Números do pet"
+              accessibilityState={{ expanded: showPetStats }}
+            >
+              <Ionicons name="bar-chart-outline" size={19} color={c.white} />
+            </Pressable>
+          )}
+
+          <Pressable
+            style={({ pressed }) => [
+              s.headerButton,
+              s.headerButtonGap,
+              pressed && s.pressed,
+            ]}
+            onPress={() => setShowQuickActions((v) => !v)}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Ações rápidas"
+            accessibilityState={{ expanded: showQuickActions }}
+          >
+            <Ionicons name="options-outline" size={20} color={c.white} />
+          </Pressable>
+        </View>
+
+        {/* PAINEL: NÚMEROS DO PET */}
+        {showPetStats && !(r.statsPanelWidth > 0) && (
+          <View style={s.painel}>
+            <View style={s.painelInner}>{painelNumerosPet}</View>
+          </View>
+        )}
+
+        {/* PAINEL: AÇÕES RÁPIDAS */}
+        {showQuickActions && (
+          <View style={s.painel}>
+            <View style={s.painelInner}>
+              <View style={s.painelHeader}>
+                <Text style={s.painelTitle}>Atalhos</Text>
+                <Pressable
+                  style={s.drawerIconBtn}
+                  hitSlop={10}
+                  onPress={() => setShowQuickActions(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Fechar atalhos"
+                >
+                  <Ionicons name="close" size={18} color={c.textSecondary} />
+                </Pressable>
+              </View>
+
+              <View style={s.quickRow}>
+                {ACOES_RAPIDAS.map((a) => (
+                  <Pressable
+                    key={a.action}
+                    style={({ pressed }) => [s.quickCard, pressed && s.pressed]}
+                    onPress={() => handleQuickAction(a.action)}
+                    accessibilityRole="button"
+                  >
+                    <View style={s.quickIcon}>
+                      <Ionicons name={a.icon} size={19} color={c.accentLight} />
+                    </View>
+                    <Text style={s.quickTitle}>{a.title}</Text>
+                    <Text style={s.quickSubtitle}>{a.subtitle}</Text>
+                  </Pressable>
+                ))}
+
+                <Pressable
+                  style={({ pressed }) => [
+                    s.quickCard,
+                    s.quickCardDestaque,
+                    pressed && s.pressed,
+                  ]}
+                  onPress={() => {
+                    setShowQuickActions(false);
+                    setShowTriage(true);
+                  }}
+                  accessibilityRole="button"
+                >
+                  <View style={s.quickIcon}>
+                    <Ionicons name="pulse-outline" size={19} color={c.accentLight} />
+                  </View>
+                  <Text style={s.quickTitle}>Triagem</Text>
+                  <Text style={s.quickSubtitle}>Avaliar sintoma</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* PAINEL: TRIAGEM */}
+        {showTriage && (
+          <Animated.View
+            style={[
+              s.painel,
+              {
+                opacity: triageAnim,
+                transform: [
+                  {
+                    translateY: triageAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-12, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <View style={s.painelInner}>
+              <View style={s.painelHeader}>
+                <View style={s.triageTitleRow}>
+                  <View style={s.triagePulse}>
+                    <Ionicons name="pulse" size={16} color={c.white} />
+                  </View>
+                  <View>
+                    <Text style={s.painelTitle}>Triagem</Text>
+                    <Text style={s.painelSubtitle}>
+                      O que está acontecendo com o pet?
+                    </Text>
+                  </View>
+                </View>
+                <Pressable
+                  style={s.drawerIconBtn}
+                  hitSlop={10}
+                  onPress={() => setShowTriage(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Fechar triagem"
+                >
+                  <Ionicons name="close" size={18} color={c.textSecondary} />
+                </Pressable>
+              </View>
+
+              <View style={s.triageGrid}>
+                {SINTOMAS.map((sintoma) => (
+                  <Pressable
+                    key={sintoma.termo}
+                    style={({ pressed }) => [s.triageItem, pressed && s.pressed]}
+                    onPress={() => handleTriage(sintoma.termo)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={s.triageEmoji}>{sintoma.emoji}</Text>
+                    <Text style={s.triageItemText}>{sintoma.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* BANNER DE URGÊNCIA */}
+        {urgente && lastResult && (
+          <View
+            style={[s.banner, emergencia ? s.bannerCritico : s.bannerAlerta]}
+            accessibilityRole="alert"
+          >
+            <View style={s.bannerInner}>
+              <View style={s.bannerIcon}>
+                <Ionicons
+                  name={emergencia ? "warning" : "alert-circle"}
+                  size={19}
+                  color={c.white}
+                />
+              </View>
+              <View style={s.bannerContent}>
+                <Text style={s.bannerTitle}>
+                  {emergencia ? "Procure um veterinário agora" : "Avalie nas próximas horas"}
+                </Text>
+                <Text style={s.bannerText}>
+                  {emergencia
+                    ? "O relato indica uma situação que pede atendimento imediato."
+                    : "Vale marcar uma consulta nas próximas 24 a 48 horas."}
+                </Text>
+              </View>
+              <Pressable
+                style={s.bannerAction}
+                hitSlop={8}
+                onPress={() =>
+                  showAlert(
+                    "Atendimento veterinário",
+                    "Procure uma clínica de confiança ou o serviço de emergência da sua região.",
+                    [{ text: "Entendi" }],
+                  )
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Mais informações"
+              >
+                <Ionicons name="information-circle-outline" size={19} color={c.white} />
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* LISTA DE MENSAGENS */}
+        <View style={s.chatContainer}>
+          <FlatList
+            ref={listRef}
+            data={messages as ChatMessage[]}
+            keyExtractor={(_, i) => `msg-${i}`}
+            renderItem={renderItem}
+            extraData={[streamedText, feedbacks, lastResult, s]}
+            contentContainerStyle={s.messagesList}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            onScroll={aoRolar}
+            scrollEventThrottle={16}
+            onContentSizeChange={aoMudarTamanho}
+            ListHeaderComponent={messages.length === 0 ? boasVindas : null}
+            ListFooterComponent={rodapeLista}
+            removeClippedSubviews={Platform.OS === "android"}
+            initialNumToRender={12}
+            maxToRenderPerBatch={10}
+            windowSize={11}
           />
-          <View style={s.inputFooter}>
-            <Text style={s.characterCount}>{input.length}/1000</Text>
-            {input.length > 0 && (
-              <TouchableOpacity onPress={() => setInput("")} activeOpacity={0.7}>
-                <Ionicons name="close-circle" size={16} color={c.textSecondary} />
-              </TouchableOpacity>
+
+          <Animated.View
+            style={[
+              s.scrollButtonWrap,
+              {
+                opacity: scrollBtnAnim,
+                transform: [{ scale: scrollBtnAnim }],
+              },
+            ]}
+            pointerEvents={showScrollButton ? "auto" : "none"}
+          >
+            <Pressable
+              style={({ pressed }) => [s.scrollButton, pressed && s.pressed]}
+              onPress={() => irParaOFim(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Ir para a última mensagem"
+            >
+              <Ionicons name="arrow-down" size={18} color={c.white} />
+            </Pressable>
+          </Animated.View>
+        </View>
+
+        {/* BARRA DE ENTRADA */}
+        <View style={s.inputBar}>
+          <View style={s.inputBarInner}>
+            <Pressable
+              style={({ pressed }) => [s.plusButton, pressed && s.pressed]}
+              onPress={() => setShowQuickActions((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel="Atalhos"
+            >
+              <Ionicons
+                name={showQuickActions ? "close" : "add"}
+                size={22}
+                color={c.accentLight}
+              />
+            </Pressable>
+
+            <View
+              style={[s.inputContainer, inputFocado && s.inputContainerFocado]}
+            >
+              <TextInput
+                style={[
+                  s.input,
+                  { height: Math.min(Math.max(22, alturaInput), r.sp(96)) },
+                ]}
+                placeholder="Pergunte ao Clyvo"
+                placeholderTextColor={c.textSecondary}
+                value={input}
+                onChangeText={setInput}
+                onContentSizeChange={(e) =>
+                  setAlturaInput(e.nativeEvent.contentSize.height)
+                }
+                multiline
+                maxLength={LIMITE_CARACTERES}
+                blurOnSubmit={false}
+                onFocus={() => setInputFocado(true)}
+                onBlur={() => setInputFocado(false)}
+                accessibilityLabel="Mensagem"
+              />
+
+              {input.length > LIMITE_CARACTERES * 0.8 && (
+                <Text style={s.characterCount}>
+                  {input.length}/{LIMITE_CARACTERES}
+                </Text>
+              )}
+            </View>
+
+            {!podeEnviar && !sending ? (
+              <Pressable
+                style={({ pressed }) => [
+                  s.sendButton,
+                  voz.gravando && s.micButtonGravando,
+                  pressed && s.pressed,
+                ]}
+                onPress={handleMicPress}
+                disabled={voz.transcrevendo}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  voz.gravando ? "Parar gravação e enviar" : "Falar mensagem por voz"
+                }
+                accessibilityState={{ selected: voz.gravando }}
+              >
+                {voz.transcrevendo ? (
+                  <ActivityIndicator size="small" color={c.white} />
+                ) : (
+                  <Ionicons
+                    name={voz.gravando ? "stop" : "mic-outline"}
+                    size={21}
+                    color={c.white}
+                  />
+                )}
+              </Pressable>
+            ) : (
+            <Pressable
+              style={({ pressed }) => [
+                s.sendButton,
+                !podeEnviar && s.sendButtonDisabled,
+                pressed && podeEnviar && s.pressed,
+              ]}
+              onPress={() => handleSend()}
+              disabled={!podeEnviar}
+              accessibilityRole="button"
+              accessibilityLabel="Enviar mensagem"
+              accessibilityState={{ disabled: !podeEnviar }}
+            >
+              {sending ? (
+                <ActivityIndicator size="small" color={c.white} />
+              ) : (
+                <Ionicons name="arrow-up" size={21} color={c.white} />
+              )}
+            </Pressable>
             )}
           </View>
         </View>
+      </KeyboardAvoidingView>
 
-        <TouchableOpacity style={[s.sendButton, (!input.trim() || sending) && s.sendButtonDisabled]} onPress={() => handleSend()} disabled={!input.trim() || sending} activeOpacity={0.82}>
-          {sending ? <ActivityIndicator size="small" color={c.white} /> : <Ionicons name="arrow-up" size={21} color={c.white} />}
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      {/* ---------- PAINEL FIXO DE NÚMEROS DO PET (desktop) ---------- */}
+      {r.statsPanelWidth > 0 && (
+        <View style={s.statsPanelFixo}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {painelNumerosPet}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* ---------- DRAWER OVERLAY (celular / tablet em pé) ---------- */}
+      {!sidebarFixa && drawerAberto && (
+        <TouchableWithoutFeedback onPress={() => setDrawerAberto(false)}>
+          <Animated.View style={[s.drawerBackdrop, { opacity: drawerAnim }]} />
+        </TouchableWithoutFeedback>
+      )}
+
+      {!sidebarFixa && (
+        <Animated.View
+          style={[
+            s.drawerOverlay,
+            {
+              transform: [
+                {
+                  translateX: drawerAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-r.drawerWidth - 24, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+          pointerEvents={drawerAberto ? "auto" : "none"}
+        >
+          {conteudoDrawer}
+        </Animated.View>
+      )}
+    </View>
   );
 }
 
-/*
-|--------------------------------------------------------------------------
-| ESTILOS PREMIUM
-|--------------------------------------------------------------------------
-*/
+/* ============================================================
+   ESTILOS
+============================================================ */
 
-const makeStyles = (theme: Theme) => {
+const makeStyles = (theme: Theme, r: Metrics) => {
   const c = theme.colors;
   const { overlay, tint, isDark } = theme;
+  const { fs, sp, insets, gutter } = r;
 
-  // Cor base do sidebar Gemini
-  const drawerBg = isDark ? '#1E1F22' : '#F0F4F9';
-  const drawerItemHover = isDark ? '#2E2F32' : '#E0E4E9';
-  const drawerItemActive = isDark ? '#3E4044' : '#D3E3FD';
+  const drawerBg = isDark ? "#1B1C1F" : "#F2F5F9";
+  const drawerTrack = isDark ? "#2B2D31" : "#E3E8EE";
+  const drawerAtivo = isDark ? "#33363C" : "#D7E6FD";
+
+  // Coluna de leitura centralizada — usada em todas as faixas
+  // (header, painéis, lista, input) para tudo alinhar no mesmo eixo.
+  const coluna = {
+    width: "100%" as const,
+    maxWidth: r.contentMaxWidth,
+    alignSelf: "center" as const,
+  };
 
   return StyleSheet.create({
-    safe: { flex: 1, backgroundColor: c.background },
-    messagesList: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 24 },
+    root: {
+      flex: 1,
+      flexDirection: "row",
+      backgroundColor: c.background,
+    },
+    mainColumn: { flex: 1, backgroundColor: c.background },
+    pressed: { opacity: 0.7 },
 
-    /* === HEADER === */
-    header: { backgroundColor: c.primary, paddingHorizontal: 13, paddingTop: Platform.OS === "ios" ? 52 : 42, paddingBottom: 13, flexDirection: "row", alignItems: "center", overflow: "hidden", elevation: 4, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, zIndex: 10 },
-    headerGlowOne: { position: "absolute", width: 170, height: 170, borderRadius: 85, right: -55, top: -118, backgroundColor: tint(0.18) },
-    headerGlowTwo: { position: "absolute", width: 120, height: 120, borderRadius: 60, left: -75, top: -100, backgroundColor: tint(0.08) },
-    headerButton: { width: 39, height: 39, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.09)" },
-    headerOptionsButton: { marginLeft: 5 },
-    headerDeleteButton: { marginLeft: 5 },
-    avatarWrapper: { width: 46, height: 46, marginLeft: 8, alignItems: "center", justifyContent: "center" },
-    avatarGlow: { position: "absolute", width: 44, height: 44, borderRadius: 22, backgroundColor: tint(0.75) },
-    headerAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: c.accentLight, borderWidth: 2, borderColor: "rgba(255,255,255,0.35)" },
+    /* ---------- HEADER ---------- */
+    header: {
+      backgroundColor: c.primary,
+      paddingTop: insets.top + sp(10),
+      paddingBottom: sp(12),
+      paddingHorizontal: gutter,
+      flexDirection: "row",
+      alignItems: "center",
+      overflow: "hidden",
+      zIndex: 10,
+      elevation: 4,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+    },
+    headerGlowOne: {
+      position: "absolute",
+      width: 180,
+      height: 180,
+      borderRadius: 90,
+      right: -60,
+      top: -120,
+      backgroundColor: tint(0.18),
+    },
+    headerGlowTwo: {
+      position: "absolute",
+      width: 130,
+      height: 130,
+      borderRadius: 65,
+      left: -80,
+      top: -100,
+      backgroundColor: tint(0.08),
+    },
+    headerButton: {
+      minWidth: 44,
+      height: 44,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(255,255,255,0.10)",
+    },
+    headerButtonGap: { marginLeft: sp(6) },
+
+    avatarWrapper: {
+      width: 46,
+      height: 46,
+      marginLeft: sp(8),
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarGlow: {
+      position: "absolute",
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: tint(0.75),
+    },
+    headerAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentLight,
+      borderWidth: 2,
+      borderColor: "rgba(255,255,255,0.35)",
+    },
     petImage: { width: 36, height: 36, borderRadius: 18 },
-    headerOnlineDot: { position: "absolute", width: 9, height: 9, borderRadius: 5, right: -1, bottom: -1, backgroundColor: c.accentGreen, borderWidth: 2, borderColor: c.primary },
-    headerInfo: { flex: 1, marginLeft: 9 },
+    headerOnlineDot: {
+      position: "absolute",
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      right: -1,
+      bottom: -1,
+      backgroundColor: c.accentGreen,
+      borderWidth: 2,
+      borderColor: c.primary,
+    },
+
+    headerInfo: { flex: 1, marginLeft: sp(10), minWidth: 0 },
     headerNameRow: { flexDirection: "row", alignItems: "center" },
-    headerTitle: { color: c.white, fontSize: 16, fontWeight: "800", maxWidth: "60%" },
-    headerChevron: { marginLeft: 4 },
-    aiBadge: { flexDirection: "row", alignItems: "center", marginLeft: 7, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 6, backgroundColor: "rgba(255,255,255,0.13)" },
-    aiBadgeText: { color: c.white, fontSize: 8, fontWeight: "900", marginLeft: 2, letterSpacing: 0.7 },
+    headerTitle: {
+      color: c.white,
+      fontSize: fs(17),
+      fontWeight: "700",
+      flexShrink: 1,
+      letterSpacing: -0.2,
+    },
+    aiBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginLeft: sp(7),
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+      backgroundColor: "rgba(255,255,255,0.16)",
+    },
+    aiBadgeText: {
+      color: c.white,
+      fontSize: fs(9),
+      fontWeight: "700",
+      marginLeft: 3,
+    },
     onlineWrapper: { flexDirection: "row", alignItems: "center", marginTop: 3 },
-    onlineDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: c.accentGreen, marginRight: 6 },
-    onlineText: { color: "rgba(255,255,255,0.68)", fontSize: 11, fontWeight: "500" },
+    onlineDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: c.accentGreen,
+      marginRight: 6,
+    },
+    onlineText: {
+      color: "rgba(255,255,255,0.7)",
+      fontSize: fs(11),
+      fontWeight: "500",
+    },
     riskWrapper: { flexDirection: "row", alignItems: "center", marginTop: 6 },
-    riskTrack: { flex: 1, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.16)", overflow: "hidden", maxWidth: 120 },
+    riskTrack: {
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: "rgba(255,255,255,0.18)",
+      overflow: "hidden",
+      flex: 1,
+      maxWidth: r.isTablet ? 200 : 110,
+    },
     riskFill: { height: 4, borderRadius: 2 },
-    riskLabel: { fontSize: 9, fontWeight: "800", marginLeft: 7, letterSpacing: 0.3 },
+    riskLabel: {
+      fontSize: fs(10),
+      fontWeight: "700",
+      marginLeft: sp(8),
+      flexShrink: 1,
+    },
 
-    /* === MENU LATERAL (DRAWER) GEMINI STYLE === */
-    drawerBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 100 },
-    drawerContainer: { position: 'absolute', top: 0, bottom: 0, left: 0, width: '82%', maxWidth: 340, backgroundColor: drawerBg, zIndex: 101, borderTopRightRadius: 24, borderBottomRightRadius: 24, elevation: 16, shadowColor: "#000", shadowOffset: { width: 5, height: 0 }, shadowOpacity: 0.3, shadowRadius: 20 },
-    drawerScroll: { paddingTop: Platform.OS === 'ios' ? 60 : 40, paddingBottom: 100 },
-    drawerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 24 },
-    drawerLogoRow: { flexDirection: 'row', alignItems: 'center' },
-    drawerLogoText: { color: c.text, fontSize: 18, fontWeight: '700', letterSpacing: -0.5 },
-    drawerCollapseBtn: { padding: 4 },
-    drawerSegmentedControl: { flexDirection: 'row', backgroundColor: drawerItemHover, marginHorizontal: 20, borderRadius: 16, padding: 4, marginBottom: 20 },
-    drawerSegmentBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 12, flexDirection: 'row' },
-    drawerSegmentBtnActive: { backgroundColor: isDark ? '#3E4044' : '#FFF', elevation: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2 },
-    drawerSegmentText: { color: c.textSecondary, fontSize: 13, fontWeight: '600' },
-    drawerSegmentTextActive: { color: c.text, fontSize: 13, fontWeight: '700' },
-    betaBadge: { marginLeft: 6, backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4 },
-    betaBadgeText: { fontSize: 7, color: c.textSecondary, fontWeight: '800' },
-    drawerMainLinks: { paddingHorizontal: 12, marginBottom: 16 },
-    drawerSection: { paddingHorizontal: 12, marginTop: 16 },
-    drawerSectionTitle: { color: c.textSecondary, fontSize: 13, fontWeight: '700', marginLeft: 12, marginBottom: 10 },
-    drawerMenuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 24, marginBottom: 4 },
-    drawerMenuItemActive: { backgroundColor: drawerItemActive },
-    drawerMenuIcon: { marginRight: 14 },
-    drawerMenuText: { color: c.textSecondary, fontSize: 14, fontWeight: '500', flex: 1 },
-    drawerMenuTextActive: { color: c.text, fontWeight: '700' },
-    drawerFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: drawerBg, borderTopWidth: 1, borderTopColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)', paddingHorizontal: 20, paddingVertical: 16, paddingBottom: Platform.OS === 'ios' ? 34 : 16 },
-    drawerProfileRow: { flexDirection: 'row', alignItems: 'center' },
-    drawerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#D94A38', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-    drawerAvatarText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-    drawerProfileInfo: { flex: 1 },
-    drawerProfileName: { color: c.text, fontSize: 14, fontWeight: '600' },
-    drawerProfilePlan: { color: c.textSecondary, fontSize: 12, marginTop: 1 },
-    drawerSettingsBtn: { padding: 4 },
+    /* ---------- SIDEBAR / DRAWER ---------- */
+    sidebarFixa: {
+      width: r.drawerWidth,
+      backgroundColor: drawerBg,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderRightColor: overlay(0.1),
+    },
+    drawerBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      zIndex: 100,
+    },
+    drawerOverlay: {
+      position: "absolute",
+      top: 0,
+      bottom: 0,
+      left: 0,
+      width: r.drawerWidth,
+      backgroundColor: drawerBg,
+      zIndex: 101,
+      borderTopRightRadius: 24,
+      borderBottomRightRadius: 24,
+      elevation: 16,
+      shadowColor: "#000",
+      shadowOffset: { width: 4, height: 0 },
+      shadowOpacity: 0.3,
+      shadowRadius: 20,
+    },
+    drawerScroll: {
+      paddingTop: insets.top + sp(12),
+      paddingBottom: sp(110),
+    },
+    drawerHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: sp(18),
+      marginBottom: sp(18),
+    },
+    drawerLogoRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+    drawerLogoText: {
+      color: c.text,
+      fontSize: fs(18),
+      fontWeight: "700",
+      letterSpacing: -0.4,
+    },
+    drawerIconBtn: {
+      minWidth: 36,
+      minHeight: 36,
+      borderRadius: 18,
+      alignItems: "center",
+      justifyContent: "center",
+    },
 
-    /* === PAINÉIS FLUTUANTES === */
-    quickActionsPanel: { backgroundColor: c.card, paddingHorizontal: 13, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: overlay(0.05), elevation: 3, shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8, zIndex: 5 },
-    quickActionsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-    quickActionsTitle: { color: c.text, fontSize: 14, fontWeight: "800" },
-    quickActionsSubtitle: { color: c.textSecondary, fontSize: 11, marginTop: 3 },
-    panelCloseButton: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: overlay(0.035) },
-    quickActionsRow: { flexDirection: "row", gap: 8 },
-    quickActionCard: { flex: 1, minHeight: 94, borderRadius: 16, padding: 11, backgroundColor: tint(0.065), borderWidth: 1, borderColor: tint(0.14), position: "relative" },
-    triageActionCard: { backgroundColor: tint(0.095) },
-    quickActionIcon: { width: 33, height: 33, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: tint(0.12) },
-    quickActionTitle: { color: c.text, fontSize: 12, fontWeight: "800", marginTop: 8 },
-    quickActionSubtitle: { color: c.textSecondary, fontSize: 10, marginTop: 2 },
-    quickActionArrow: { position: "absolute", right: 9, top: 10 },
-    triagePanel: { backgroundColor: c.card, paddingHorizontal: 13, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: overlay(0.05), elevation: 3, shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8, zIndex: 5 },
-    triageHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-    triageTitleRow: { flexDirection: "row", alignItems: "center" },
-    triagePulse: { width: 31, height: 31, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: c.accentLight },
-    triageTitle: { color: c.text, fontSize: 14, fontWeight: "800", marginLeft: 8 },
-    triageSubtitle: { color: c.textSecondary, fontSize: 11, marginTop: 3 },
-    triageGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-    triageItem: { width: "48%", minHeight: 64, borderRadius: 14, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", backgroundColor: tint(0.06), borderWidth: 1, borderColor: tint(0.12) },
-    triageEmoji: { fontSize: 21 },
-    triageItemText: { color: c.text, fontSize: 12, fontWeight: "700", marginLeft: 8 },
+    drawerSegmented: {
+      flexDirection: "row",
+      backgroundColor: drawerTrack,
+      marginHorizontal: sp(16),
+      borderRadius: 14,
+      padding: 4,
+      marginBottom: sp(16),
+    },
+    drawerSegmentBtn: {
+      flex: 1,
+      minHeight: 40,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 11,
+      flexDirection: "row",
+    },
+    drawerSegmentBtnAtivo: {
+      backgroundColor: isDark ? "#3A3D42" : "#FFFFFF",
+      elevation: 1,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.08,
+      shadowRadius: 2,
+    },
+    drawerSegmentText: {
+      color: c.textSecondary,
+      fontSize: fs(13),
+      fontWeight: "600",
+    },
+    drawerSegmentTextAtivo: {
+      color: c.text,
+      fontSize: fs(13),
+      fontWeight: "700",
+    },
+    betaBadge: {
+      marginLeft: 6,
+      backgroundColor: overlay(0.08),
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    betaBadgeText: {
+      fontSize: fs(8),
+      color: c.textSecondary,
+      fontWeight: "700",
+    },
 
-    /* === ALERTA / BANNER === */
-    banner: { flexDirection: "row", alignItems: "center", paddingHorizontal: 13, paddingVertical: 12, elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, zIndex: 4 },
+    drawerBloco: { paddingHorizontal: sp(10), marginBottom: sp(14) },
+    drawerSectionTitle: {
+      color: c.textSecondary,
+      fontSize: fs(12),
+      fontWeight: "700",
+      marginLeft: sp(12),
+      marginBottom: sp(8),
+    },
+    drawerItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      minHeight: 46,
+      paddingHorizontal: sp(12),
+      borderRadius: 23,
+      marginBottom: 2,
+    },
+    drawerItemAtivo: { backgroundColor: drawerAtivo },
+    drawerItemIcon: { marginRight: sp(13) },
+    drawerItemText: {
+      color: c.textSecondary,
+      fontSize: fs(14),
+      fontWeight: "500",
+      flex: 1,
+    },
+    drawerItemTextAtivo: { color: c.text, fontWeight: "700" },
+
+    drawerFooter: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: drawerBg,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: overlay(0.1),
+      paddingHorizontal: sp(18),
+      paddingTop: sp(14),
+      paddingBottom: Math.max(insets.bottom, sp(14)),
+    },
+    drawerAvatar: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: c.accentLight,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: sp(12),
+    },
+    drawerAvatarText: { color: "#FFF", fontSize: fs(15), fontWeight: "700" },
+    drawerPerfilInfo: { flex: 1 },
+    drawerPerfilNome: { color: c.text, fontSize: fs(14), fontWeight: "600" },
+    drawerPerfilPlano: {
+      color: c.textSecondary,
+      fontSize: fs(12),
+      marginTop: 1,
+    },
+
+    /* ---------- PAINÉIS ---------- */
+    painel: {
+      backgroundColor: c.card,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: overlay(0.08),
+      zIndex: 5,
+      elevation: 3,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.08,
+      shadowRadius: 8,
+    },
+    painelInner: {
+      ...coluna,
+      paddingHorizontal: gutter,
+      paddingVertical: sp(14),
+    },
+    painelHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: sp(12),
+    },
+    painelTitle: { color: c.text, fontSize: fs(15), fontWeight: "700" },
+    painelSubtitle: {
+      color: c.textSecondary,
+      fontSize: fs(12),
+      marginTop: 2,
+    },
+
+    quickRow: { flexDirection: "row", gap: sp(8) },
+    quickCard: {
+      flex: 1,
+      minHeight: 96,
+      borderRadius: 16,
+      padding: sp(12),
+      backgroundColor: tint(0.07),
+      borderWidth: 1,
+      borderColor: tint(0.14),
+    },
+    quickCardDestaque: { backgroundColor: tint(0.1) },
+    quickIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 11,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: tint(0.13),
+    },
+    quickTitle: {
+      color: c.text,
+      fontSize: fs(13),
+      fontWeight: "700",
+      marginTop: sp(9),
+    },
+    quickSubtitle: { color: c.textSecondary, fontSize: fs(11), marginTop: 2 },
+
+    triageTitleRow: { flexDirection: "row", alignItems: "center", gap: sp(10) },
+    triagePulse: {
+      width: 32,
+      height: 32,
+      borderRadius: 11,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentLight,
+    },
+    triageGrid: { flexDirection: "row", flexWrap: "wrap", gap: sp(8) },
+    triageItem: {
+      width:
+        r.triageColumns === 4
+          ? `${100 / 4 - 2}%`
+          : `${100 / 2 - 2}%`,
+      minHeight: 62,
+      borderRadius: 14,
+      paddingHorizontal: sp(12),
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: tint(0.06),
+      borderWidth: 1,
+      borderColor: tint(0.12),
+    },
+    triageEmoji: { fontSize: fs(20) },
+    triageItemText: {
+      color: c.text,
+      fontSize: fs(13),
+      fontWeight: "600",
+      marginLeft: sp(8),
+      flexShrink: 1,
+    },
+
+    /* ---------- BANNER ---------- */
+    banner: { zIndex: 4 },
     bannerAlerta: { backgroundColor: isDark ? "#7A4A02" : "#A96504" },
     bannerCritico: { backgroundColor: isDark ? "#8C1B12" : "#B42318" },
-    bannerIcon: { width: 35, height: 35, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.14)" },
-    bannerContent: { flex: 1, marginLeft: 10, marginRight: 8 },
-    bannerTitle: { color: c.white, fontSize: 13, fontWeight: "800" },
-    bannerText: { color: "rgba(255,255,255,0.84)", fontSize: 11, marginTop: 2, lineHeight: 16 },
-    bannerAction: { width: 31, height: 31, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.10)" },
+    bannerInner: {
+      ...coluna,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: gutter,
+      paddingVertical: sp(12),
+    },
+    bannerIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(255,255,255,0.16)",
+    },
+    bannerContent: { flex: 1, marginHorizontal: sp(10) },
+    bannerTitle: { color: c.white, fontSize: fs(13), fontWeight: "700" },
+    bannerText: {
+      color: "rgba(255,255,255,0.85)",
+      fontSize: fs(12),
+      marginTop: 2,
+      lineHeight: fs(17),
+    },
+    bannerAction: {
+      minWidth: 36,
+      minHeight: 36,
+      borderRadius: 18,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(255,255,255,0.12)",
+    },
 
-    /* === HERO E CHAT === */
-    chatContainer: { flex: 1, position: "relative" },
-    welcomeContainer: { alignItems: "center", paddingTop: 22, paddingBottom: 20, paddingHorizontal: 4 },
-    heroArea: { width: 130, height: 115, alignItems: "center", justifyContent: "center", position: "relative" },
-    heroAvatar: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", backgroundColor: c.card, borderWidth: 1, borderColor: tint(0.24), elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 6 }, shadowOpacity: isDark ? 0.35 : 0.12, shadowRadius: 16 },
-    heroPetImage: { width: 70, height: 70, borderRadius: 35 },
-    heroOrbitOne: { position: "absolute", width: 105, height: 105, borderRadius: 53, borderWidth: 1, borderColor: tint(0.15) },
-    heroOrbitTwo: { position: "absolute", width: 123, height: 123, borderRadius: 62, borderWidth: 1, borderColor: tint(0.08) },
-    heroSparkle: { position: "absolute", right: 9, top: 9, width: 25, height: 25, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: c.accentLight, borderWidth: 2, borderColor: c.card },
-    heroOnline: { position: "absolute", bottom: 3, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, flexDirection: "row", alignItems: "center", backgroundColor: isDark ? c.secondary : c.primary, borderWidth: 2, borderColor: c.card },
-    heroOnlineDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: c.accentGreen, marginRight: 4 },
-    heroOnlineText: { color: c.white, fontSize: 8, fontWeight: "900", letterSpacing: 0.8 },
-    welcomeBadge: { color: c.accentLight, fontSize: 9, fontWeight: "900", letterSpacing: 2.2, marginBottom: 6 },
-    welcomeTitle: { color: c.text, fontSize: 24, fontWeight: "800", textAlign: "center" },
-    welcomeSubtitle: { color: c.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center", marginTop: 8, maxWidth: 350 },
-    trustRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 15 },
-    trustItem: { flexDirection: "row", alignItems: "center" },
-    trustText: { color: c.textSecondary, fontSize: 9, fontWeight: "600", marginLeft: 4 },
-    trustDivider: { width: 3, height: 3, borderRadius: 2, backgroundColor: c.textSecondary, opacity: 0.35, marginHorizontal: 9 },
-    welcomeInfo: { width: "100%", flexDirection: "row", alignItems: "center", backgroundColor: c.card, borderRadius: 17, marginTop: 21, padding: 14, borderWidth: 1, borderColor: tint(0.1), elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.22 : 0.05, shadowRadius: 10 },
-    infoIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: tint(0.1) },
-    infoContent: { flex: 1, marginLeft: 11 },
-    infoTitle: { color: c.text, fontSize: 13, fontWeight: "800" },
-    infoText: { color: c.textSecondary, fontSize: 11, lineHeight: 17, marginTop: 3 },
-    infoStatus: { width: 14, height: 14, borderRadius: 7, alignItems: "center", justifyContent: "center", marginLeft: 7 },
-    infoStatusDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: c.accentGreen },
+    /* ---------- LISTA ---------- */
+    chatContainer: { flex: 1 },
+    messagesList: {
+      ...coluna,
+      paddingHorizontal: gutter,
+      paddingTop: sp(16),
+      paddingBottom: sp(20),
+    },
 
-    triageLaunch: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 18, padding: 12, borderRadius: 16, backgroundColor: isDark ? c.secondary : c.primary, elevation: 4, shadowColor: c.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.4 : 0.2, shadowRadius: 12 },
-    triageLaunchIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.12)" },
-    triageLaunchContent: { flex: 1, marginLeft: 10 },
-    triageLaunchTitle: { color: c.white, fontSize: 13, fontWeight: "800" },
-    triageLaunchText: { color: "rgba(255,255,255,0.68)", fontSize: 10, marginTop: 2 },
-    suggestionsContainer: { width: "100%", marginTop: 24 },
-    suggestionsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
-    suggestionsTitle: { color: c.text, fontSize: 14, fontWeight: "800" },
-    suggestionsSubtitle: { color: c.textSecondary, fontSize: 10, marginTop: 2 },
-    closeSuggestion: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: overlay(0.035) },
-    suggestionCard: { minHeight: 58, flexDirection: "row", alignItems: "center", backgroundColor: c.card, borderRadius: 16, paddingHorizontal: 12, marginBottom: 9, borderWidth: 1, borderColor: isDark ? c.border : overlay(0.04), elevation: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 4 },
-    suggestionCardHighlight: { borderColor: tint(0.2) },
-    suggestionIcon: { width: 35, height: 35, borderRadius: 11, alignItems: "center", justifyContent: "center", backgroundColor: tint(0.1) },
-    suggestionText: { flex: 1, color: c.text, fontSize: 13, lineHeight: 18, marginLeft: 10, marginRight: 8 },
-    suggestionArrow: { width: 29, height: 29, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: tint(0.08) },
+    /* ---------- BOAS-VINDAS ---------- */
+    welcomeContainer: {
+      alignItems: "center",
+      paddingTop: sp(20),
+      paddingBottom: sp(16),
+    },
+    heroArea: {
+      width: 176,
+      height: 156,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: sp(18),
+    },
+    heroGlowBackdrop: {
+      position: "absolute",
+      width: 176,
+      height: 176,
+      borderRadius: 88,
+      backgroundColor: tint(0.28),
+    },
+    heroAvatar: {
+      width: 92,
+      height: 92,
+      borderRadius: 46,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: isDark ? "#0A1220" : c.card,
+      borderWidth: 1.5,
+      borderColor: tint(0.4),
+      elevation: 10,
+      shadowColor: c.accentLight,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: isDark ? 0.55 : 0.2,
+      shadowRadius: 22,
+    },
+    heroPetImage: { width: 86, height: 86, borderRadius: 43 },
+    heroOrbitOne: {
+      position: "absolute",
+      width: 120,
+      height: 120,
+      borderRadius: 60,
+      borderWidth: 1,
+      borderColor: tint(0.32),
+    },
+    heroOrbitTwo: {
+      position: "absolute",
+      width: 148,
+      height: 148,
+      borderRadius: 74,
+      borderWidth: 1,
+      borderColor: tint(0.16),
+    },
+    heroOrbitThree: {
+      position: "absolute",
+      width: 176,
+      height: 176,
+      borderRadius: 88,
+      borderWidth: 1,
+      borderColor: tint(0.07),
+    },
+    heroSparkle: {
+      position: "absolute",
+      right: 14,
+      top: 10,
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentLight,
+      borderWidth: 2,
+      borderColor: c.background,
+    },
+    welcomeTitle: {
+      color: c.text,
+      fontSize: fs(r.isTablet ? 32 : 26),
+      fontWeight: "700",
+      textAlign: "center",
+      letterSpacing: -0.6,
+    },
+    welcomeSubtitle: {
+      color: c.textSecondary,
+      fontSize: fs(14),
+      lineHeight: fs(21),
+      textAlign: "center",
+      marginTop: sp(8),
+      maxWidth: 420,
+    },
+    trustRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: sp(14),
+    },
+    trustItem: { flexDirection: "row", alignItems: "center", gap: 5 },
+    trustText: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      fontWeight: "600",
+    },
+    trustDivider: {
+      width: 3,
+      height: 3,
+      borderRadius: 2,
+      backgroundColor: c.textSecondary,
+      opacity: 0.4,
+      marginHorizontal: sp(10),
+    },
 
-    /* === BOLHAS DE MENSAGEM === */
-    messageRow: { width: "100%", flexDirection: "row", marginBottom: 16, alignItems: "flex-end" },
+    triageLaunch: {
+      width: "100%",
+      maxWidth: 520,
+      flexDirection: "row",
+      alignItems: "center",
+      marginTop: sp(20),
+      padding: sp(13),
+      borderRadius: 18,
+      backgroundColor: isDark ? c.secondary : c.primary,
+      elevation: 4,
+      shadowColor: c.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.4 : 0.2,
+      shadowRadius: 12,
+    },
+    triageLaunchIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(255,255,255,0.14)",
+    },
+    triageLaunchContent: { flex: 1, marginHorizontal: sp(11) },
+    triageLaunchTitle: { color: c.white, fontSize: fs(14), fontWeight: "700" },
+    triageLaunchText: {
+      color: "rgba(255,255,255,0.72)",
+      fontSize: fs(11),
+      marginTop: 2,
+    },
+
+    suggestionsContainer: { width: "100%", maxWidth: 620, marginTop: sp(26) },
+    suggestionsHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: sp(10),
+    },
+    suggestionsTitle: { color: c.text, fontSize: fs(15), fontWeight: "700" },
+    suggestionsGrid: {
+      flexDirection: r.isTablet ? "row" : "column",
+      flexWrap: "wrap",
+      gap: sp(9),
+    },
+    suggestionCard: {
+      flexGrow: 1,
+      flexBasis: r.isTablet ? "30%" : "100%",
+      minHeight: 60,
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: c.card,
+      borderRadius: 16,
+      paddingHorizontal: sp(13),
+      paddingVertical: sp(10),
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.05),
+    },
+    suggestionIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: tint(0.1),
+    },
+    suggestionText: {
+      flex: 1,
+      color: c.text,
+      fontSize: fs(13),
+      lineHeight: fs(18),
+      marginHorizontal: sp(10),
+    },
+    suggestionArrow: { opacity: 0.8 },
+
+    /* ---------- MENSAGENS ---------- */
+    messageRow: {
+      width: "100%",
+      flexDirection: "row",
+      marginBottom: sp(16),
+      alignItems: "flex-end",
+    },
     messageRowUser: { justifyContent: "flex-end" },
     messageRowAi: { justifyContent: "flex-start" },
-    messageAvatar: { width: 29, height: 29, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: c.accentLight, marginRight: 8, borderWidth: 2, borderColor: isDark ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.55)", elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
-    userAvatar: { width: 29, height: 29, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: isDark ? c.secondary : c.primary, marginLeft: 8, elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
-    messageContent: { maxWidth: "79%" },
+    messageAvatar: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.accentLight,
+      marginRight: sp(8),
+    },
+    userAvatar: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: isDark ? c.secondary : c.primary,
+      marginLeft: sp(8),
+    },
+    messageContent: { maxWidth: r.bubbleMaxWidth, minWidth: 0 },
     messageContentUser: { alignItems: "flex-end" },
     messageContentAi: { alignItems: "flex-start" },
-    messageLabelRow: { marginLeft: 2, marginBottom: 4 },
-    messageLabelRowUser: { alignItems: "flex-end" },
-    messageLabel: { color: c.accentLight, fontSize: 9, fontWeight: "900", letterSpacing: 0.6 },
-    messageLabelUser: { color: c.textSecondary, fontSize: 9, fontWeight: "700" },
-    userBubble: { backgroundColor: isDark ? c.secondary : c.primary, paddingHorizontal: 15, paddingVertical: 11, borderRadius: 18, borderBottomRightRadius: 4, elevation: 3, shadowColor: c.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.35 : 0.15, shadowRadius: 8 },
-    aiBubble: { backgroundColor: c.card, paddingHorizontal: 15, paddingVertical: 11, borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: isDark ? c.border : overlay(0.04), elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: isDark ? 0.22 : 0.05, shadowRadius: 8 },
-    userText: { color: c.white, fontSize: 14, lineHeight: 21 },
-    aiText: { color: c.text, fontSize: 14, lineHeight: 22 },
-    messageActions: { flexDirection: "row", alignItems: "center", marginTop: 4, marginLeft: 2 },
-    messageAction: { width: 25, height: 25, borderRadius: 13, alignItems: "center", justifyContent: "center", marginRight: 2 },
-    triageTag: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
-    triageTagText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.8 },
-    cursor: { width: 7, height: 14, marginTop: 4, borderRadius: 2, backgroundColor: c.accentLight, opacity: 0.75 },
+    messageLabel: {
+      color: c.accentLight,
+      fontSize: fs(11),
+      fontWeight: "700",
+      marginBottom: 4,
+      marginLeft: 2,
+    },
+    messageLabelUser: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      fontWeight: "600",
+      marginBottom: 4,
+      marginRight: 2,
+    },
+    userBubble: {
+      backgroundColor: isDark ? c.secondary : c.primary,
+      paddingHorizontal: sp(15),
+      paddingVertical: sp(11),
+      borderRadius: 20,
+      borderBottomRightRadius: 6,
+    },
+    aiBubble: {
+      backgroundColor: c.card,
+      paddingHorizontal: sp(15),
+      paddingVertical: sp(11),
+      borderRadius: 20,
+      borderBottomLeftRadius: 6,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.05),
+    },
+    userText: { color: c.white, fontSize: fs(15), lineHeight: fs(22) },
+    aiText: { color: c.text, fontSize: fs(15), lineHeight: fs(23) },
+    messageActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginTop: 4,
+    },
+    messageAction: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    triageTag: {
+      alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      borderRadius: 9,
+      borderWidth: 1,
+      marginBottom: sp(9),
+    },
+    triageTagText: { fontSize: fs(10), fontWeight: "700" },
+    cursor: {
+      width: 7,
+      height: fs(15),
+      marginTop: 4,
+      borderRadius: 2,
+      backgroundColor: c.accentLight,
+      opacity: 0.75,
+    },
 
-    sourcesRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5, marginLeft: 36, marginRight: 4, marginTop: -6, marginBottom: 14 },
-    sourceChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: tint(0.08), borderWidth: 1, borderColor: tint(0.14), maxWidth: 150 },
-    sourceChipText: { fontSize: 9, fontWeight: "600", color: c.textSecondary },
-    alertsBlock: { marginLeft: 36, marginRight: 4, marginBottom: 16 },
-    alertsLabel: { color: c.textSecondary, fontSize: 8, fontWeight: "900", letterSpacing: 1, marginBottom: 7 },
-    alertChip: { flexDirection: "row", alignItems: "flex-start", backgroundColor: c.card, borderRadius: 12, borderLeftWidth: 3, paddingVertical: 9, paddingHorizontal: 11, marginBottom: 7, borderWidth: 1, borderColor: isDark ? c.border : overlay(0.035), elevation: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 4 },
-    alertChipContent: { flex: 1, marginLeft: 8 },
-    alertChipTitle: { color: c.text, fontSize: 11, fontWeight: "800" },
-    alertChipDetail: { color: c.textSecondary, fontSize: 10, lineHeight: 15, marginTop: 2 },
-    cta: { width: "88%", alignSelf: "flex-start", marginLeft: 36, marginBottom: 16, padding: 13, borderRadius: 17, backgroundColor: c.card, borderWidth: 1, borderColor: tint(0.2), flexDirection: "row", alignItems: "center", elevation: 3, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.25 : 0.06, shadowRadius: 10 },
-    ctaIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: tint(0.1) },
-    ctaContent: { flex: 1, marginLeft: 10 },
-    ctaEyebrow: { color: c.accentLight, fontSize: 8, fontWeight: "900", letterSpacing: 1 },
-    ctaTitle: { color: c.text, fontSize: 13, fontWeight: "800", marginTop: 2 },
-    ctaDescription: { color: c.textSecondary, fontSize: 10, marginTop: 2 },
-    ctaArrow: { width: 31, height: 31, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: c.accentLight },
+    /* ---------- FONTES / ALERTAS / CTA ---------- */
+    sourcesRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: 6,
+      marginLeft: 38,
+      marginTop: -sp(6),
+      marginBottom: sp(14),
+    },
+    sourceChip: {
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      borderRadius: 9,
+      backgroundColor: tint(0.08),
+      borderWidth: 1,
+      borderColor: tint(0.14),
+      maxWidth: 170,
+    },
+    sourceChipText: {
+      fontSize: fs(10),
+      fontWeight: "600",
+      color: c.textSecondary,
+    },
 
-    typingRow: { flexDirection: "row", alignItems: "flex-end", marginBottom: 16 },
-    skeletonBubble: { flex: 1, maxWidth: "79%", paddingHorizontal: 14, paddingVertical: 12, borderRadius: 18, borderBottomLeftRadius: 5, backgroundColor: c.card, borderWidth: 1, borderColor: isDark ? c.border : overlay(0.035) },
-    skeletonHeader: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
-    skeletonLine: { height: 9, borderRadius: 5, marginBottom: 7, backgroundColor: c.textLight },
-    typingDots: { flexDirection: "row", alignItems: "center", gap: 3 },
-    typingDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: c.accentLight },
-    typingText: { color: c.textSecondary, fontSize: 12, marginLeft: 8 },
+    alertsBlock: { marginLeft: 38, marginBottom: sp(16) },
+    alertsLabel: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      fontWeight: "700",
+      marginBottom: sp(8),
+    },
+    alertChip: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      backgroundColor: c.card,
+      borderRadius: 13,
+      borderLeftWidth: 3,
+      paddingVertical: sp(10),
+      paddingHorizontal: sp(12),
+      marginBottom: sp(7),
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.04),
+    },
+    alertChipContent: { flex: 1, marginLeft: sp(9) },
+    alertChipTitle: { color: c.text, fontSize: fs(12), fontWeight: "700" },
+    alertChipDetail: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      lineHeight: fs(16),
+      marginTop: 3,
+    },
 
-    scrollButton: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", backgroundColor: isDark ? c.secondary : c.primary, elevation: 8, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
-    
-    /* === INPUT === */
-    inputBar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 14, paddingTop: 12, paddingBottom: Platform.OS === "ios" ? 20 : 16, backgroundColor: c.background, borderTopWidth: 1, borderTopColor: isDark ? "rgba(255,255,255,0.06)" : overlay(0.05) },
-    plusButton: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 8, marginBottom: 2, backgroundColor: isDark ? "rgba(255,255,255,0.05)" : tint(0.06), borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.08)" : tint(0.12) },
-    inputContainer: { flex: 1, minHeight: 48, maxHeight: 94, borderRadius: 8, backgroundColor: c.card, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 7, borderWidth: 1, borderColor: isDark ? "rgba(255,255,255,0.30)" : overlay(0.08), elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: isDark ? 0.20 : 0.05, shadowRadius: 6 },
-    input: { color: c.text, fontSize: 15, lineHeight: 21, maxHeight: 60, padding: 0 },
-    inputFooter: { height: 13, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, marginTop: 3 },
-    characterCount: { fontSize: 8, color: c.textSecondary, opacity: 0.55 },
-    sendButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", marginLeft: 8, marginBottom: 2, backgroundColor: isDark ? c.accent : c.primary, elevation: 6, shadowColor: c.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
-    sendButtonDisabled: { backgroundColor: isDark ? "#283750" : "#D9DEE6", elevation: 0, shadowOpacity: 0 },
+    cta: {
+      alignSelf: "flex-start",
+      maxWidth: r.bubbleMaxWidth + 40,
+      marginLeft: 38,
+      marginBottom: sp(16),
+      padding: sp(13),
+      borderRadius: 18,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: tint(0.2),
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    ctaIcon: {
+      width: 42,
+      height: 42,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: tint(0.1),
+    },
+    ctaContent: { flex: 1, marginHorizontal: sp(11) },
+    ctaTitle: { color: c.text, fontSize: fs(14), fontWeight: "700" },
+    ctaDescription: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      marginTop: 2,
+    },
+
+    /* ---------- DIGITANDO ---------- */
+    typingRow: {
+      flexDirection: "row",
+      alignItems: "flex-end",
+      marginBottom: sp(16),
+    },
+    skeletonBubble: {
+      flex: 1,
+      maxWidth: r.bubbleMaxWidth,
+      paddingHorizontal: sp(15),
+      paddingVertical: sp(13),
+      borderRadius: 20,
+      borderBottomLeftRadius: 6,
+      backgroundColor: c.card,
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.04),
+    },
+    skeletonHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: sp(11),
+    },
+    skeletonLine: {
+      height: 9,
+      borderRadius: 5,
+      marginBottom: 7,
+      backgroundColor: c.textLight,
+    },
+    typingDots: { flexDirection: "row", alignItems: "center", gap: 4 },
+    typingDot: {
+      width: 5,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: c.accentLight,
+    },
+    typingText: {
+      color: c.textSecondary,
+      fontSize: fs(12),
+      marginLeft: sp(9),
+      flexShrink: 1,
+    },
+
+    /* ---------- BOTÃO DE ROLAGEM ---------- */
+    scrollButtonWrap: {
+      position: "absolute",
+      right: gutter,
+      bottom: sp(16),
+    },
+    scrollButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: isDark ? c.secondary : c.primary,
+      elevation: 8,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+    },
+
+    /* ---------- ENTRADA ---------- */
+    inputBar: {
+      backgroundColor: c.background,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: overlay(0.08),
+      paddingBottom: Math.max(insets.bottom, sp(12)),
+      paddingTop: sp(12),
+    },
+    inputBarInner: {
+      ...coluna,
+      flexDirection: "row",
+      alignItems: "flex-end",
+      paddingHorizontal: gutter,
+    },
+    plusButton: {
+      width: 46,
+      height: 46,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: sp(8),
+      backgroundColor: isDark ? overlay(0.06) : tint(0.07),
+      borderWidth: 1,
+      borderColor: isDark ? overlay(0.09) : tint(0.13),
+    },
+    inputContainer: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: 23,
+      backgroundColor: isDark ? "#0A1220" : c.card,
+      paddingHorizontal: sp(16),
+      paddingVertical: sp(11),
+      borderWidth: 1,
+      borderColor: isDark ? tint(0.22) : overlay(0.09),
+      justifyContent: "center",
+    },
+    inputContainerFocado: {
+      borderColor: c.accentLight,
+      borderWidth: 1.5,
+      shadowColor: c.accentLight,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: isDark ? 0.45 : 0,
+      shadowRadius: 12,
+      elevation: isDark ? 4 : 0,
+    },
+    input: {
+      color: c.text,
+      fontSize: fs(15),
+      lineHeight: fs(21),
+      padding: 0,
+      textAlignVertical: "center",
+    },
+    characterCount: {
+      fontSize: fs(10),
+      color: c.textSecondary,
+      alignSelf: "flex-end",
+      marginTop: 4,
+    },
+    sendButton: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      alignItems: "center",
+      justifyContent: "center",
+      marginLeft: sp(8),
+      backgroundColor: isDark ? c.accent : c.primary,
+      elevation: 6,
+      shadowColor: c.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+    },
+    sendButtonDisabled: {
+      backgroundColor: isDark ? "#283750" : "#D9DEE6",
+      elevation: 0,
+      shadowOpacity: 0,
+    },
+    micButtonGravando: {
+      backgroundColor: c.accentRed,
+      shadowColor: c.accentRed,
+    },
+
+    /* ---------- PAINEL: NÚMEROS DO PET ---------- */
+    statsPanelFixo: {
+      width: r.statsPanelWidth,
+      backgroundColor: drawerBg,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderLeftColor: overlay(0.1),
+      paddingTop: insets.top + sp(16),
+      paddingBottom: sp(16),
+    },
+    statsPanelInner: { paddingHorizontal: sp(16) },
+    statsPanelHeader: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      justifyContent: "space-between",
+      marginBottom: sp(14),
+    },
+    statsPanelTitle: {
+      color: c.text,
+      fontSize: fs(15),
+      fontWeight: "700",
+    },
+    statsPanelSubtitle: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      marginTop: 2,
+    },
+    statsPanelInfoRow: {
+      flexDirection: "row",
+      backgroundColor: tint(0.06),
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: tint(0.12),
+      paddingVertical: sp(10),
+      marginBottom: sp(14),
+    },
+    statsPanelInfoItem: {
+      flex: 1,
+      alignItems: "center",
+      paddingHorizontal: 4,
+    },
+    statsPanelInfoLabel: {
+      color: c.textSecondary,
+      fontSize: fs(10),
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+    },
+    statsPanelInfoValue: {
+      color: c.text,
+      fontSize: fs(13),
+      fontWeight: "700",
+      marginTop: 3,
+    },
+    statsCardsWrap: { gap: sp(10) },
+    statCard: {
+      backgroundColor: c.card,
+      borderRadius: 16,
+      padding: sp(13),
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.05),
+    },
+    statCardIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      alignItems: "center",
+      justifyContent: "center",
+      marginBottom: sp(9),
+    },
+    statCardValue: {
+      color: c.text,
+      fontSize: fs(20),
+      fontWeight: "700",
+      letterSpacing: -0.4,
+    },
+    statCardLabel: {
+      color: c.text,
+      fontSize: fs(12),
+      fontWeight: "600",
+      marginTop: 2,
+    },
+    statCardSub: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      marginTop: 2,
+    },
   });
 };

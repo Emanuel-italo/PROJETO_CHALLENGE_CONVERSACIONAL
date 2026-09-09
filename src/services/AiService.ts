@@ -1,4 +1,5 @@
 
+import { Platform } from "react-native";
 import { Pet } from "../types";
 import { ChatMessage } from "../hooks/useChatHistory";
 
@@ -100,6 +101,69 @@ async function request<T>(
   }
 }
 
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  m4a: "audio/m4a",
+  mp4: "audio/mp4",
+  caf: "audio/x-caf",
+  wav: "audio/wav",
+  webm: "audio/webm",
+  ogg: "audio/ogg",
+  "3gp": "audio/3gpp",
+};
+
+async function transcreverAudio(uri: string): Promise<string> {
+  const formData = new FormData();
+
+  if (Platform.OS === "web") {
+    const gravado = await fetch(uri);
+    const blob = await gravado.blob();
+    const extensao = blob.type.split("/").pop() || "webm";
+    formData.append("file", blob, `gravacao.${extensao}`);
+  } else {
+    const extensao = uri.split(".").pop()?.toLowerCase() || "m4a";
+    const tipo = AUDIO_MIME_BY_EXT[extensao] || "audio/m4a";
+    formData.append("file", {
+      uri,
+      name: `gravacao.${extensao}`,
+      type: tipo,
+    } as unknown as Blob);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  console.log("CLYVO STT REQUEST:", `${BASE_URL}/api/speech/transcribe`);
+
+  try {
+    const response = await fetch(`${BASE_URL}/api/speech/transcribe`, {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
+    });
+
+    console.log("CLYVO STT STATUS:", response.status);
+
+    const texto = await response.text();
+
+    console.log("CLYVO STT RESPONSE:", texto);
+
+    if (!response.ok) {
+      throw new Error(`Serviço de voz respondeu ${response.status}: ${texto}`);
+    }
+
+    const dados = JSON.parse(texto) as { text: string };
+    return dados.text;
+  } catch (error) {
+    console.error("CLYVO STT ERROR:", error);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("A transcrição de voz demorou demais e foi cancelada.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 class AiService {
   async chat(params: {
     pet: Pet | null;
@@ -119,6 +183,10 @@ class AiService {
 
   async evaluateAll(pets: Pet[]): Promise<PetRisk[]> {
     return request<PetRisk[]>("/api/alerts/batch", pets);
+  }
+
+  async transcribe(uri: string): Promise<string> {
+    return transcreverAudio(uri);
   }
 }
 

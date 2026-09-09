@@ -28,7 +28,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Permita o uso do microfone para conversar por voz com o Clyvo."
+        }
+      ]
     ]
   }
 }

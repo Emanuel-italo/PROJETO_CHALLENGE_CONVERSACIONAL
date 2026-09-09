@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_max_tokens: int = 700
     llm_timeout_seconds: float = 25.0
+    # Whisper (OpenAI) ...: whisper-1
+    # Whisper (Groq) .....: whisper-large-v3
+    stt_model: str = "whisper-1"
+    stt_timeout_seconds: float = 60.0
 
 
     rag_backend: str = "simple"

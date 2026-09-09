@@ -136,6 +136,10 @@ class ChatResponse(BaseModel):
 
 
 
+class TranscriptionResponse(BaseModel):
+    text: str
+
+
 class RpaInscricaoRequest(BaseModel):
     pet: Pet
     tutorNome: str = ""

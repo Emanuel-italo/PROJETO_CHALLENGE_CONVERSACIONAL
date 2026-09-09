@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .llm import llm_client
 from .rag import knowledge_base
-from .routers import alerts, chat, rpa
+from .routers import alerts, chat, rpa, speech
+from .stt import stt_client
 from . import scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(chat.router)
 app.include_router(alerts.router)
 app.include_router(rpa.router)
+app.include_router(speech.router)
 
 
 @app.on_event("startup")
@@ -55,6 +57,10 @@ def health() -> dict:
         "rag": {
             "backend": knowledge_base.backend_name,
             "chunks": len(knowledge_base.chunks),
+        },
+        "stt": {
+            "enabled": stt_client.enabled,
+            "model": settings.stt_model if stt_client.enabled else None,
         },
         "rpa": {
             "enabled": settings.rpa_enabled,

@@ -31,21 +31,21 @@ export const LightColors = {
 // Escuro suavizado. Se preferir o escuro anterior, troque background/card/border
 // pelos valores antigos (#070D18 / #111B2C / #22304A).
 export const DarkColors: typeof LightColors = {
-  primary: "#0A1628",
-  secondary: "#1E3A5F",
+  primary: "#060A14",
+  secondary: "#101E36",
   accent: "#2C82D6",
-  accentLight: "#5AA9FF",
+  accentLight: "#4FA8FF",
   accentGreen: "#35D07F",
   accentOrange: "#F5A623",
   accentRed: "#FF6B5E",
   white: "#FFFFFF",
   black: "#000000",
-  background: "#0C1424",
-  card: "#16223A",
+  background: "#050810",
+  card: "#0E1728",
   text: "#E8EEF6",
-  textSecondary: "#93A3B8",
-  textLight: "#61748C",
-  border: "#263651",
+  textSecondary: "#8CA0BC",
+  textLight: "#54677F",
+  border: "#1C2A40",
 };
 
 export type ThemeColors = typeof LightColors;
