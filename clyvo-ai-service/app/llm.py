@@ -48,6 +48,7 @@ class LLMClient:
         timeout: float | None = None,
         max_tokens: int | None = None,
         json_mode: bool = True,
+        reasoning_effort: str | None = None,
     ) -> dict:
 
         if not self.enabled:
@@ -68,6 +69,13 @@ class LLMClient:
             ],
             "include_reasoning": False,
         }
+
+        # Modelos com "modo pensamento" (ex.: Qwen na visão) gastam o
+        # orçamento de tokens no raciocínio interno e podem devolver
+        # message.content vazio se max_tokens for baixo. "none" desliga
+        # esse raciocínio e força a resposta final direto no content.
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         # Alguns modelos (ex.: visão da Groq) rejeitam a própria geração no
         # modo JSON estrito com "json_validate_failed" mesmo com prompt

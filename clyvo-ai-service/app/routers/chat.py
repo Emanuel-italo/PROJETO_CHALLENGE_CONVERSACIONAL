@@ -77,6 +77,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
                 timeout=VISION_TIMEOUT_SECONDS if tem_imagem else None,
                 max_tokens=VISION_MAX_TOKENS if tem_imagem else None,
                 json_mode=not tem_imagem,
+                reasoning_effort="none" if tem_imagem else None,
             )
         except LLMError as exc:
             logger.warning("Falha no LLM, caindo para modo simulado: %s", exc)
