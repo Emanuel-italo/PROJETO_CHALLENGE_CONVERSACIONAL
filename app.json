@@ -34,6 +34,13 @@
         {
           "microphonePermission": "Permita o uso do microfone para conversar por voz com o Clyvo."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permita o acesso às fotos para enviar uma foto do seu pet ao Clyvo.",
+          "cameraPermission": "Permita o uso da câmera para fotografar seu pet e enviar ao Clyvo."
+        }
       ]
     ]
   }

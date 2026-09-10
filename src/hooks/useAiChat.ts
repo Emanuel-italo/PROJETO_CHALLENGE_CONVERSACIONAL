@@ -17,7 +17,7 @@ export function useAiChat(pet: Pet | null) {
   const [lastResult, setLastResult] = useState<ChatResult | null>(null);
 
   const mutation = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async ({ text, imageBase64 }: { text: string; imageBase64?: string }) => {
       // 1. Filtra lixo do AsyncStorage (garante que só tenha mensagens com role e content)
       // 2. Pega apenas as últimas 19 mensagens, para que a atual seja a 20ª e não estoure o backend
       const safeHistory = messages
@@ -25,9 +25,9 @@ export function useAiChat(pet: Pet | null) {
         .slice(-19);
 
       const history: ChatMessage[] = [...safeHistory, { role: "user", content: text }];
-      
+
       // CORREÇÃO AQUI: Agora enviamos o objeto "pet" real em vez de null!
-      return aiService.chat({ pet: pet, message: text, history });
+      return aiService.chat({ pet: pet, message: text, history, imageBase64 });
     },
     onSuccess: async (result) => {
       setLastResult(result);
@@ -49,7 +49,7 @@ export function useAiChat(pet: Pet | null) {
       if (!trimmed || mutation.isPending) return;
 
       await addMessage({ role: "user", content: trimmed });
-      mutation.mutate(trimmed);
+      mutation.mutate({ text: trimmed });
     },
     [addMessage, mutation],
   );
@@ -60,7 +60,18 @@ export function useAiChat(pet: Pet | null) {
       if (!trimmed || mutation.isPending) return;
 
       await addMessage({ role: "user", content: trimmed, audioUri, audioDuration });
-      mutation.mutate(trimmed);
+      mutation.mutate({ text: trimmed });
+    },
+    [addMessage, mutation],
+  );
+
+  const sendImage = useCallback(
+    async (text: string, imageUri: string, imageBase64: string) => {
+      const trimmed = text.trim() || "Avalie essa foto do meu pet.";
+      if (mutation.isPending) return;
+
+      await addMessage({ role: "user", content: trimmed, imageUri });
+      mutation.mutate({ text: trimmed, imageBase64 });
     },
     [addMessage, mutation],
   );
@@ -78,6 +89,7 @@ export function useAiChat(pet: Pet | null) {
     lastResult,
     send,
     sendAudio,
+    sendImage,
     updateMessage,
     reset,
   };

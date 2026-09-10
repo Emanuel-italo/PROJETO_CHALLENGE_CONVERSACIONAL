@@ -55,6 +55,10 @@ def health() -> dict:
             "model": settings.llm_model if llm_client.enabled else None,
             "mode": "live" if llm_client.enabled else "simulated",
         },
+        "vision": {
+            "enabled": llm_client.enabled,
+            "model": settings.vision_model if llm_client.enabled else None,
+        },
         "rag": {
             "backend": knowledge_base.backend_name,
             "chunks": len(knowledge_base.chunks),

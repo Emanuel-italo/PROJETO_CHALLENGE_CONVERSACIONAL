@@ -64,6 +64,7 @@ import { usePetRisk } from "../../hooks/usePetRisk";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
 import { useSpeechOutput } from "../../hooks/useSpeechOutput";
 import { useBreedPhoto } from "../../hooks/useBreedPhoto";
+import { useImagePicker } from "../../hooks/useImagePicker";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
 import { DarkColors, LightColors, Theme, useTheme } from "../../styles/theme";
 import RichText from "../../components/RichText";
@@ -85,6 +86,7 @@ type ChatMessage = {
   audioUri?: string;
   audioDuration?: number;
   timestamp?: number;
+  imageUri?: string;
 };
 
 /** Métricas calculadas uma vez por mudança de viewport. */
@@ -641,6 +643,7 @@ const Bolha = memo(
     onShare,
     semAnimacao,
     respondida,
+    aoAbrirImagem,
   }: {
     msg: ChatMessage;
     index: number;
@@ -655,6 +658,7 @@ const Bolha = memo(
     semAnimacao: boolean;
     /** Só pra mensagens do usuário: já veio resposta da IA depois dela? */
     respondida: boolean;
+    aoAbrirImagem: (uri: string) => void;
   }) {
     const c = theme.colors;
     const isUser = msg.role === "user";
@@ -690,6 +694,22 @@ const Bolha = memo(
                     horario={horario}
                     lida={respondida}
                   />
+                ) : msg.imageUri ? (
+                  <Pressable onPress={() => aoAbrirImagem(msg.imageUri!)}>
+                    <FotoComFade
+                      uri={msg.imageUri}
+                      style={s.mensagemFotoThumb}
+                      reduceMotion={semAnimacao}
+                    />
+                    <View style={s.mensagemStatusRow}>
+                      <Text style={s.mensagemHorario}>{horario}</Text>
+                      <Ionicons
+                        name={respondida ? "checkmark-done" : "checkmark"}
+                        size={13}
+                        color={respondida ? "#53BDEB" : "rgba(255,255,255,0.75)"}
+                      />
+                    </View>
+                  </Pressable>
                 ) : (
                   <>
                     <Text style={s.userText} selectable>
@@ -854,6 +874,7 @@ const Bolha = memo(
     a.texto === b.texto &&
     a.msg.content === b.msg.content &&
     a.msg.audioUri === b.msg.audioUri &&
+    a.msg.imageUri === b.msg.imageUri &&
     a.mostrarCursor === b.mostrarCursor &&
     a.feedback === b.feedback &&
     a.s === b.s &&
@@ -904,7 +925,7 @@ export default function PetChatScreen() {
     if (!selectedPetId && pets.length) setSelectedPetId(pets[0].id);
   }, [pets, selectedPetId]);
 
-  const { messages, sending, lastResult, send, sendAudio, updateMessage, reset } =
+  const { messages, sending, lastResult, send, sendAudio, sendImage, updateMessage, reset } =
     useAiChat(pet);
   const { data: risk } = usePetRisk(pet);
 
@@ -912,6 +933,8 @@ export default function PetChatScreen() {
 
   const voz = useVoiceRecorder();
   const fala = useSpeechOutput();
+  const imagePicker = useImagePicker();
+  const [enviandoFoto, setEnviandoFoto] = useState(false);
 
   /* ---------- estado de UI ---------- */
 
@@ -924,6 +947,7 @@ export default function PetChatScreen() {
   const [showTriage, setShowTriage] = useState(false);
   const [showPetStats, setShowPetStats] = useState(false);
   const [showAlertsDetail, setShowAlertsDetail] = useState(false);
+  const [imagemAmpliada, setImagemAmpliada] = useState<string | null>(null);
   const [buscaAberta, setBuscaAberta] = useState(false);
   const [termoBusca, setTermoBusca] = useState("");
   const [indiceResultado, setIndiceResultado] = useState(0);
@@ -1284,6 +1308,35 @@ export default function PetChatScreen() {
   const handleCancelarGravacao = useCallback(() => {
     voz.cancelar();
   }, [voz]);
+
+  const handleEnviarFoto = useCallback(
+    async (origem: "camera" | "galeria") => {
+      if (enviandoFoto || sending) return;
+
+      setShowQuickActions(false);
+
+      const { foto, erro } =
+        origem === "camera" ? await imagePicker.tirarFoto() : await imagePicker.escolherDaGaleria();
+
+      if (erro) {
+        showAlert("Não deu para acessar isso", erro);
+        return;
+      }
+      if (!foto) return;
+
+      setEnviandoFoto(true);
+      try {
+        setShowSuggestions(false);
+        setShowTriage(false);
+        if (!sidebarFixa) setDrawerAberto(false);
+        noFimRef.current = true;
+        await sendImage("Avalie essa foto do meu pet.", foto.uri, foto.base64);
+      } finally {
+        setEnviandoFoto(false);
+      }
+    },
+    [enviandoFoto, sending, imagePicker, sidebarFixa, sendImage],
+  );
 
   const handleClearChat = useCallback(() => {
     if (!messages.length) return;
@@ -2025,6 +2078,7 @@ export default function PetChatScreen() {
           onShare={handleShare}
           semAnimacao={reduceMotion}
           respondida={respondida}
+          aoAbrirImagem={setImagemAmpliada}
         />
       );
     },
@@ -2339,6 +2393,32 @@ export default function PetChatScreen() {
                   <Text style={s.quickTitle}>Triagem</Text>
                   <Text style={s.quickSubtitle}>Avaliar sintoma</Text>
                 </Toque>
+
+                <Toque
+                  style={s.quickCard}
+                  onPress={() => handleEnviarFoto("camera")}
+                  reduceMotion={reduceMotion}
+                  disabled={enviandoFoto}
+                >
+                  <View style={s.quickIcon}>
+                    <Ionicons name="camera-outline" size={19} color={c.accentLight} />
+                  </View>
+                  <Text style={s.quickTitle}>Tirar foto</Text>
+                  <Text style={s.quickSubtitle}>Avaliação visual</Text>
+                </Toque>
+
+                <Toque
+                  style={s.quickCard}
+                  onPress={() => handleEnviarFoto("galeria")}
+                  reduceMotion={reduceMotion}
+                  disabled={enviandoFoto}
+                >
+                  <View style={s.quickIcon}>
+                    <Ionicons name="images-outline" size={19} color={c.accentLight} />
+                  </View>
+                  <Text style={s.quickTitle}>Da galeria</Text>
+                  <Text style={s.quickSubtitle}>Avaliação visual</Text>
+                </Toque>
               </View>
             </View>
           </View>
@@ -2586,19 +2666,35 @@ export default function PetChatScreen() {
                 </View>
 
                 {!podeEnviar && !sending ? (
-                  <Pressable
-                    style={({ pressed }) => [s.sendButton, pressed && s.pressed]}
-                    onPress={handleMicPress}
-                    disabled={voz.transcrevendo}
-                    accessibilityRole="button"
-                    accessibilityLabel="Falar mensagem por voz"
-                  >
-                    {voz.transcrevendo ? (
-                      <ActivityIndicator size="small" color={c.white} />
-                    ) : (
-                      <Ionicons name="mic-outline" size={21} color={c.white} />
-                    )}
-                  </Pressable>
+                  <>
+                    <Pressable
+                      style={({ pressed }) => [s.cameraButton, pressed && s.pressed]}
+                      onPress={() => handleEnviarFoto("camera")}
+                      disabled={enviandoFoto}
+                      accessibilityRole="button"
+                      accessibilityLabel="Tirar foto do pet"
+                    >
+                      {enviandoFoto ? (
+                        <ActivityIndicator size="small" color={c.accentLight} />
+                      ) : (
+                        <Ionicons name="camera-outline" size={21} color={c.accentLight} />
+                      )}
+                    </Pressable>
+
+                    <Pressable
+                      style={({ pressed }) => [s.sendButton, pressed && s.pressed]}
+                      onPress={handleMicPress}
+                      disabled={voz.transcrevendo}
+                      accessibilityRole="button"
+                      accessibilityLabel="Falar mensagem por voz"
+                    >
+                      {voz.transcrevendo ? (
+                        <ActivityIndicator size="small" color={c.white} />
+                      ) : (
+                        <Ionicons name="mic-outline" size={21} color={c.white} />
+                      )}
+                    </Pressable>
+                  </>
                 ) : (
                   <Pressable
                     style={({ pressed }) => [
@@ -2699,6 +2795,37 @@ export default function PetChatScreen() {
               </View>
             )}
           </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ---------- MODAL: FOTO EM TELA CHEIA ---------- */}
+      <Modal
+        visible={!!imagemAmpliada}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setImagemAmpliada(null)}
+      >
+        <Pressable
+          style={s.fotoModalBackdrop}
+          onPress={() => setImagemAmpliada(null)}
+        >
+          <Pressable
+            style={s.fotoModalFechar}
+            onPress={() => setImagemAmpliada(null)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Fechar foto"
+          >
+            <Ionicons name="close" size={26} color={c.white} />
+          </Pressable>
+
+          {!!imagemAmpliada && (
+            <FotoComFade
+              uri={imagemAmpliada}
+              style={s.fotoModalImagem}
+              reduceMotion={reduceMotion}
+            />
+          )}
         </Pressable>
       </Modal>
 
@@ -3110,9 +3237,10 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       marginRight: 2,
     },
 
-    quickRow: { flexDirection: "row", gap: sp(8) },
+    quickRow: { flexDirection: "row", flexWrap: "wrap", gap: sp(8) },
     quickCard: {
-      flex: 1,
+      flexGrow: 1,
+      flexBasis: r.isTablet ? "22%" : "47%",
       minHeight: 96,
       borderRadius: 16,
       padding: sp(12),
@@ -3469,6 +3597,12 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       color: "rgba(255,255,255,0.7)",
       fontSize: fs(10),
     },
+    mensagemFotoThumb: {
+      width: 220,
+      height: 220,
+      borderRadius: 14,
+      backgroundColor: overlay(0.06),
+    },
     mensagemHorarioAiTexto: {
       color: c.textSecondary,
       fontSize: fs(10),
@@ -3740,6 +3874,17 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       borderWidth: 1,
       borderColor: isDark ? overlay(0.09) : tint(0.13),
     },
+    cameraButton: {
+      width: 46,
+      height: 46,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      marginLeft: sp(8),
+      backgroundColor: isDark ? overlay(0.06) : tint(0.07),
+      borderWidth: 1,
+      borderColor: isDark ? overlay(0.09) : tint(0.13),
+    },
 
     /* ---------- BARRA DE GRAVAÇÃO ---------- */
     gravacaoCancelar: {
@@ -3973,6 +4118,32 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       color: c.textSecondary,
       fontSize: fs(13),
       fontWeight: "600",
+    },
+
+    /* ---------- MODAL: FOTO EM TELA CHEIA ---------- */
+    fotoModalBackdrop: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.92)",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: sp(20),
+    },
+    fotoModalFechar: {
+      position: "absolute",
+      top: insets.top + sp(14),
+      right: sp(18),
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(255,255,255,0.14)",
+      zIndex: 1,
+    },
+    fotoModalImagem: {
+      width: "100%",
+      height: "80%",
+      resizeMode: "contain",
     },
   });
 };

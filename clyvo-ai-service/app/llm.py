@@ -44,13 +44,17 @@ class LLMClient:
         self,
         system: str,
         messages: list[dict],
+        model: str | None = None,
+        timeout: float | None = None,
     ) -> dict:
 
         if not self.enabled:
             raise LLMError("LLM não configurado.")
 
+        modelo = model or settings.llm_model
+
         payload = {
-            "model": settings.llm_model,
+            "model": modelo,
             "temperature": settings.llm_temperature,
             "max_tokens": settings.llm_max_tokens,
             "messages": [
@@ -74,11 +78,11 @@ class LLMClient:
         }
 
         print("LLM URL:", url)
-        print("LLM MODEL:", settings.llm_model)
+        print("LLM MODEL:", modelo)
         print("LLM REQUEST ENVIADO")
 
         async with httpx.AsyncClient(
-            timeout=settings.llm_timeout_seconds
+            timeout=timeout or settings.llm_timeout_seconds
         ) as client:
 
             try:

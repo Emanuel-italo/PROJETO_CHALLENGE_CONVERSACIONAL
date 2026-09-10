@@ -13,6 +13,8 @@ export type ChatMessage = {
   audioDuration?: number;
   /** Instante do envio (ms desde epoch) — mostrado como horário na bolha. */
   timestamp?: number;
+  /** Presente quando a mensagem inclui uma foto do pet (pré-avaliação visual). */
+  imageUri?: string;
 };
 
 const CHAT_KEY = "@clyvo:chat_history";

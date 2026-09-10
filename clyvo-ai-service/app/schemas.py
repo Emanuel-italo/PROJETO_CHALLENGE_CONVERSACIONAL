@@ -123,6 +123,9 @@ class ChatRequest(BaseModel):
     petId: str | None = None
     message: str = Field(min_length=1, max_length=2000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=20)
+    # Data URI (data:image/jpeg;base64,...) de uma foto do pet, opcional —
+    # quando presente, a resposta usa um modelo com visão computacional.
+    imageBase64: str | None = None
 
 
 class ChatResponse(BaseModel):

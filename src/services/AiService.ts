@@ -169,11 +169,13 @@ class AiService {
     pet: Pet | null;
     message: string;
     history: ChatMessage[];
+    imageBase64?: string;
   }): Promise<ChatResult> {
     return request<ChatResult>("/api/chat", {
       pet: params.pet,
       message: params.message,
       history: params.history.slice(-8),
+      imageBase64: params.imageBase64,
     });
   }
 
