@@ -11,6 +11,8 @@ export type ChatMessage = {
   audioUri?: string;
   /** Duração aproximada em segundos, usada antes do player carregar. */
   audioDuration?: number;
+  /** Instante do envio (ms desde epoch) — mostrado como horário na bolha. */
+  timestamp?: number;
 };
 
 const CHAT_KEY = "@clyvo:chat_history";
@@ -48,7 +50,11 @@ export function useChatHistory() {
   }, [load]);
 
   const addMessage = useCallback(async (message: ChatMessage) => {
-    const comId: ChatMessage = { ...message, id: message.id ?? gerarId() };
+    const comId: ChatMessage = {
+      ...message,
+      id: message.id ?? gerarId(),
+      timestamp: message.timestamp ?? Date.now(),
+    };
     let updated: ChatMessage[] = [];
 
     setMessages((current) => {

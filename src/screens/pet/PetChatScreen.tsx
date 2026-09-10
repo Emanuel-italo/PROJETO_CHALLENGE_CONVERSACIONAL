@@ -84,6 +84,7 @@ type ChatMessage = {
   content: string;
   audioUri?: string;
   audioDuration?: number;
+  timestamp?: number;
 };
 
 /** Métricas calculadas uma vez por mudança de viewport. */
@@ -162,6 +163,16 @@ const LIMITE_CARACTERES = 1000;
 /** Multiplicadores fixos pra dar variação natural às barras de nível de
  * voz — todas sobem/descem juntas com o volume real, só a proporção varia. */
 const NIVEL_MULTIPLICADORES = [0.5, 0.85, 1, 0.6, 0.9, 0.7, 1, 0.55, 0.8, 0.65];
+
+/** HH:mm do horário de envio — sem depender de Intl (nem sempre disponível
+ * de forma completa no engine JS do RN). */
+function formatarHorarioMensagem(timestamp?: number): string {
+  if (!timestamp) return "";
+  const d = new Date(timestamp);
+  const hh = d.getHours().toString().padStart(2, "0");
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  return `${hh}:${mm}`;
+}
 
 /** mm:ss a partir de segundos (arredonda, nunca fica negativo). */
 function formatarTempoAudio(segundos: number): string {
@@ -503,6 +514,8 @@ const AudioMessageBubble = memo(function AudioMessageBubble({
   s,
   variante = "user",
   corAccent,
+  horario,
+  lida,
 }: {
   uri: string;
   duracaoAproximada: number;
@@ -512,6 +525,10 @@ const AudioMessageBubble = memo(function AudioMessageBubble({
   variante?: "user" | "assistant";
   /** Cor de destaque usada na variante "assistant" (padrão: azul do tema). */
   corAccent?: string;
+  /** HH:mm do envio, exibido tipo WhatsApp. */
+  horario?: string;
+  /** Só relevante pra variante "user": mostra ✓✓ quando a IA já respondeu. */
+  lida?: boolean;
 }) {
   const player = useAudioPlayer(uri);
   const status = useAudioPlayerStatus(player);
@@ -544,43 +561,64 @@ const AudioMessageBubble = memo(function AudioMessageBubble({
   const cor = corAccent ?? "#4A9EFF";
 
   return (
-    <View style={s.audioBubble}>
-      <Pressable
-        onPress={alternar}
-        style={[
-          s.audioBubbleBotao,
-          ehAssistente && { backgroundColor: cor },
-        ]}
-        accessibilityRole="button"
-        accessibilityLabel={status.playing ? "Pausar áudio" : "Reproduzir áudio"}
-      >
-        <Ionicons name={status.playing ? "pause" : "play"} size={15} color="#FFF" />
-      </Pressable>
+    <View style={s.audioBubbleWrap}>
+      <View style={s.audioBubble}>
+        <Pressable
+          onPress={alternar}
+          style={[
+            s.audioBubbleBotao,
+            ehAssistente && { backgroundColor: cor },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={status.playing ? "Pausar áudio" : "Reproduzir áudio"}
+        >
+          <Ionicons name={status.playing ? "pause" : "play"} size={15} color="#FFF" />
+        </Pressable>
 
-      <View style={s.audioBubbleOnda}>
-        {barras.map((altura, i) => (
-          <View
-            key={i}
-            style={[
-              s.audioBubbleBarra,
-              {
-                height: 3 + altura * 13,
-                backgroundColor: ehAssistente
-                  ? i / barras.length <= progresso
-                    ? cor
-                    : `${cor}33`
-                  : i / barras.length <= progresso
-                    ? "rgba(255,255,255,0.95)"
-                    : "rgba(255,255,255,0.32)",
-              },
-            ]}
-          />
-        ))}
+        <View style={s.audioBubbleOnda}>
+          {barras.map((altura, i) => (
+            <View
+              key={i}
+              style={[
+                s.audioBubbleBarra,
+                {
+                  height: 3 + altura * 13,
+                  backgroundColor: ehAssistente
+                    ? i / barras.length <= progresso
+                      ? cor
+                      : `${cor}33`
+                    : i / barras.length <= progresso
+                      ? "rgba(255,255,255,0.95)"
+                      : "rgba(255,255,255,0.32)",
+                },
+              ]}
+            />
+          ))}
+        </View>
       </View>
 
-      <Text style={[s.audioBubbleTempo, ehAssistente && { color: cor }]}>
-        {semAudio ? "áudio" : tempoExibido}
-      </Text>
+      <View style={s.audioBubbleRodape}>
+        <Text style={[s.audioBubbleTempo, ehAssistente && { color: cor }]}>
+          {semAudio ? "áudio" : tempoExibido}
+        </Text>
+
+        {!!horario && (
+          <View style={s.audioBubbleStatus}>
+            <Text
+              style={ehAssistente ? s.audioBubbleHorarioAi : s.audioBubbleHorario}
+            >
+              {horario}
+            </Text>
+            {!ehAssistente && (
+              <Ionicons
+                name={lida ? "checkmark-done" : "checkmark"}
+                size={13}
+                color={lida ? "#53BDEB" : "rgba(255,255,255,0.75)"}
+              />
+            )}
+          </View>
+        )}
+      </View>
     </View>
   );
 });
@@ -602,6 +640,7 @@ const Bolha = memo(
     onFeedback,
     onShare,
     semAnimacao,
+    respondida,
   }: {
     msg: ChatMessage;
     index: number;
@@ -614,10 +653,13 @@ const Bolha = memo(
     onFeedback: (index: number, valor: "like" | "dislike") => void;
     onShare: (texto: string) => void;
     semAnimacao: boolean;
+    /** Só pra mensagens do usuário: já veio resposta da IA depois dela? */
+    respondida: boolean;
   }) {
     const c = theme.colors;
     const isUser = msg.role === "user";
     const [mostrarTexto, setMostrarTexto] = useState(false);
+    const horario = formatarHorarioMensagem(msg.timestamp);
 
     return (
       <Entrada disabled={semAnimacao}>
@@ -645,11 +687,23 @@ const Bolha = memo(
                     uri={msg.audioUri}
                     duracaoAproximada={msg.audioDuration ?? 0}
                     s={s}
+                    horario={horario}
+                    lida={respondida}
                   />
                 ) : (
-                  <Text style={s.userText} selectable>
-                    {msg.content}
-                  </Text>
+                  <>
+                    <Text style={s.userText} selectable>
+                      {msg.content}
+                    </Text>
+                    <View style={s.mensagemStatusRow}>
+                      <Text style={s.mensagemHorario}>{horario}</Text>
+                      <Ionicons
+                        name={respondida ? "checkmark-done" : "checkmark"}
+                        size={13}
+                        color={respondida ? "#53BDEB" : "rgba(255,255,255,0.75)"}
+                      />
+                    </View>
+                  </>
                 )
               ) : (
                 <>
@@ -684,6 +738,7 @@ const Bolha = memo(
                         s={s}
                         variante="assistant"
                         corAccent={c.accentLight}
+                        horario={horario}
                       />
                       <Pressable
                         onPress={() => setMostrarTexto((v) => !v)}
@@ -713,12 +768,17 @@ const Bolha = memo(
                       )}
                     </>
                   ) : (
-                    <RichText
-                      content={texto}
-                      style={s.aiText}
-                      accentColor={c.accentLight}
-                      codeBackground={theme.tint(0.12)}
-                    />
+                    <>
+                      <RichText
+                        content={texto}
+                        style={s.aiText}
+                        accentColor={c.accentLight}
+                        codeBackground={theme.tint(0.12)}
+                      />
+                      {!mostrarCursor && !!horario && (
+                        <Text style={s.mensagemHorarioAiTexto}>{horario}</Text>
+                      )}
+                    </>
                   )}
 
                   {mostrarCursor && <View style={s.cursor} />}
@@ -793,9 +853,11 @@ const Bolha = memo(
   (a, b) =>
     a.texto === b.texto &&
     a.msg.content === b.msg.content &&
+    a.msg.audioUri === b.msg.audioUri &&
     a.mostrarCursor === b.mostrarCursor &&
     a.feedback === b.feedback &&
     a.s === b.s &&
+    a.respondida === b.respondida &&
     a.tagUrgencia?.rotulo === b.tagUrgencia?.rotulo,
 );
 
@@ -1943,6 +2005,7 @@ export default function PetChatScreen() {
     ({ item, index }: { item: ChatMessage; index: number }) => {
       const ehUltima = index === messages.length - 1;
       const emStream = index === streamIndexRef.current;
+      const respondida = messages[index + 1]?.role === "assistant";
 
       return (
         <Bolha
@@ -1961,11 +2024,12 @@ export default function PetChatScreen() {
           onFeedback={handleFeedback}
           onShare={handleShare}
           semAnimacao={reduceMotion}
+          respondida={respondida}
         />
       );
     },
     [
-      messages.length,
+      messages,
       s,
       theme,
       streamedText,
@@ -3394,14 +3458,51 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       borderColor: isDark ? c.border : overlay(0.05),
     },
     userText: { color: c.white, fontSize: fs(15), lineHeight: fs(22) },
+    mensagemStatusRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      alignSelf: "flex-end",
+      gap: 3,
+      marginTop: sp(4),
+    },
+    mensagemHorario: {
+      color: "rgba(255,255,255,0.7)",
+      fontSize: fs(10),
+    },
+    mensagemHorarioAiTexto: {
+      color: c.textSecondary,
+      fontSize: fs(10),
+      marginTop: sp(6),
+      alignSelf: "flex-end",
+    },
     aiText: { color: c.text, fontSize: fs(15), lineHeight: fs(23) },
 
     /* ---------- MENSAGEM DE VOZ ---------- */
+    audioBubbleWrap: { minWidth: 168 },
     audioBubble: {
       flexDirection: "row",
       alignItems: "center",
-      minWidth: 168,
       gap: sp(8),
+    },
+    audioBubbleRodape: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginTop: sp(5),
+      paddingLeft: 40,
+    },
+    audioBubbleStatus: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+    },
+    audioBubbleHorario: {
+      color: "rgba(255,255,255,0.7)",
+      fontSize: fs(10),
+    },
+    audioBubbleHorarioAi: {
+      color: c.textSecondary,
+      fontSize: fs(10),
     },
     audioBubbleBotao: {
       width: 32,

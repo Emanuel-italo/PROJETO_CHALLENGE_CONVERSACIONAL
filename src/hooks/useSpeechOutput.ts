@@ -69,7 +69,8 @@ export function useSpeechOutput() {
       try {
         const resposta = await fetch(aiService.speechSynthesisUrl(limpo));
         if (!resposta.ok) {
-          throw new Error(`TTS respondeu ${resposta.status}`);
+          const detalhe = await resposta.text().catch(() => "");
+          throw new Error(`TTS respondeu ${resposta.status}: ${detalhe}`);
         }
 
         let uri: string;
@@ -99,10 +100,11 @@ export function useSpeechOutput() {
 
         player.play();
         return { uri };
-      } catch {
-        // Backend sem ElevenLabs configurado, sem internet, etc.
-        // Não deixa o tutor sem resposta em voz: usa a voz do aparelho.
+      } catch (e) {
+        // Backend sem ElevenLabs configurado, cota estourada, sem internet,
+        // etc. Não deixa o tutor sem resposta em voz: usa a voz do aparelho.
         // (Sem URI reaproveitável — a voz do sistema não gera um arquivo.)
+        console.warn("CLYVO TTS: caiu para voz do aparelho —", e);
         falarComVozDoDispositivo(limpo);
         return { uri: null };
       }
