@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Whisper (Groq) .....: whisper-large-v3
     stt_model: str = "whisper-1"
     stt_timeout_seconds: float = 60.0
+    # Código ISO-639-1 do idioma falado pelo tutor. Vazio = deixa o
+    # Whisper adivinhar sozinho (não recomendado, ver comentário em stt.py).
+    stt_language: str = "pt"
 
     # TTS (ElevenLabs) — voz personalizada das respostas.
     # Voice IDs: https://elevenlabs.io/app/voice-library

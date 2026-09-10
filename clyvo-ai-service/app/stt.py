@@ -31,6 +31,12 @@ class SttClient:
             "model": settings.stt_model,
         }
 
+        # Sem isso, o Whisper tenta adivinhar o idioma sozinho — em áudios
+        # curtos ou ambíguos ele erra e assume inglês, virando texto sem
+        # sentido. Forçar o idioma evita esse tipo de transcrição errada.
+        if settings.stt_language:
+            data["language"] = settings.stt_language
+
         async with httpx.AsyncClient(timeout=settings.stt_timeout_seconds) as client:
             try:
                 response = await client.post(url, headers=headers, data=data, files=files)
