@@ -65,6 +65,7 @@ import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
 import { useSpeechOutput } from "../../hooks/useSpeechOutput";
 import { useBreedPhoto } from "../../hooks/useBreedPhoto";
 import { useImagePicker } from "../../hooks/useImagePicker";
+import { useMockColar } from "../../hooks/useMockColar";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
 import { DarkColors, LightColors, Theme, useTheme } from "../../styles/theme";
 import RichText from "../../components/RichText";
@@ -474,6 +475,94 @@ const FotoComFade = memo(function FotoComFade({
  * foto real da raça (busca sob demanda), com ícone de pata como último
  * recurso.
  */
+/**
+ * Coração que pulsa no ritmo real do BPM simulado (batida a batida, não
+ * um loop genérico) — quanto maior o BPM, mais rápido pulsa.
+ */
+const BatimentoIcon = memo(function BatimentoIcon({
+  bpm,
+  cor,
+  reduceMotion,
+}: {
+  bpm: number;
+  cor: string;
+  reduceMotion: boolean;
+}) {
+  const escala = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (reduceMotion) return;
+
+    const duracaoBatida = 60000 / Math.max(30, bpm) / 2;
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(escala, {
+          toValue: 1.28,
+          duration: duracaoBatida,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(escala, {
+          toValue: 1,
+          duration: duracaoBatida,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [bpm, reduceMotion, escala]);
+
+  return (
+    <Animated.View style={{ transform: [{ scale: escala }] }}>
+      <Ionicons name="heart" size={20} color={cor} />
+    </Animated.View>
+  );
+});
+
+/** Termômetro com um brilho suave "respirando" — só pra dar sensação de
+ * leitura ao vivo, sem ser tão chamativo quanto o batimento. */
+const TermometroIcon = memo(function TermometroIcon({
+  cor,
+  reduceMotion,
+}: {
+  cor: string;
+  reduceMotion: boolean;
+}) {
+  const opacidade = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (reduceMotion) return;
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacidade, {
+          toValue: 0.5,
+          duration: 1100,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacidade, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [reduceMotion, opacidade]);
+
+  return (
+    <Animated.View style={{ opacity: opacidade }}>
+      <Ionicons name="thermometer" size={20} color={cor} />
+    </Animated.View>
+  );
+});
+
 const DrawerPetAvatar = memo(function DrawerPetAvatar({
   pet,
   s,
@@ -1461,6 +1550,7 @@ export default function PetChatScreen() {
   const mostrarAlertas = !sending && ultimaEhDaIa && alertasVisiveis.length > 0;
 
   const fotoRaca = useBreedPhoto(pet);
+  const colar = useMockColar(pet?.id);
 
   const petImage =
     (pet as any)?.imageUri ??
@@ -2048,6 +2138,93 @@ export default function PetChatScreen() {
             </Entrada>
           );
         })}
+      </View>
+
+      <View style={s.colarSecao}>
+        <View style={s.colarTituloRow}>
+          <Ionicons name="hardware-chip-outline" size={13} color={c.textSecondary} />
+          <Text style={s.colarTitulo}>Coleira ClyvoVet · dado de exemplo (POC)</Text>
+        </View>
+
+        <View style={s.statsCardsWrap}>
+          <Entrada disabled={reduceMotion} delay={cartoesPet.length * 80}>
+            <View style={s.statCard}>
+              <View
+                style={[
+                  s.statCardAccent,
+                  {
+                    backgroundColor:
+                      colar.bpm < 60 || colar.bpm > 130 ? c.accentOrange : c.accentRed,
+                  },
+                ]}
+              />
+              <View style={s.statCardBody}>
+                <View style={s.statCardTopRow}>
+                  <Text style={s.statCardLabel}>Batimentos</Text>
+                  <BatimentoIcon
+                    bpm={colar.bpm}
+                    cor={colar.bpm < 60 || colar.bpm > 130 ? c.accentOrange : c.accentRed}
+                    reduceMotion={reduceMotion}
+                  />
+                </View>
+                <Text
+                  style={[
+                    s.statCardValue,
+                    { color: colar.bpm < 60 || colar.bpm > 130 ? c.accentOrange : c.accentRed },
+                  ]}
+                >
+                  {colar.bpm}
+                  <Text style={s.statCardUnidade}> bpm</Text>
+                </Text>
+                <Text style={s.statCardSub}>Leitura simulada da coleira</Text>
+              </View>
+            </View>
+          </Entrada>
+
+          <Entrada disabled={reduceMotion} delay={cartoesPet.length * 80 + 80}>
+            <View style={s.statCard}>
+              <View
+                style={[
+                  s.statCardAccent,
+                  {
+                    backgroundColor:
+                      colar.temperatura < 38.3 || colar.temperatura > 39.2
+                        ? c.accentOrange
+                        : c.accentGreen,
+                  },
+                ]}
+              />
+              <View style={s.statCardBody}>
+                <View style={s.statCardTopRow}>
+                  <Text style={s.statCardLabel}>Temperatura</Text>
+                  <TermometroIcon
+                    cor={
+                      colar.temperatura < 38.3 || colar.temperatura > 39.2
+                        ? c.accentOrange
+                        : c.accentGreen
+                    }
+                    reduceMotion={reduceMotion}
+                  />
+                </View>
+                <Text
+                  style={[
+                    s.statCardValue,
+                    {
+                      color:
+                        colar.temperatura < 38.3 || colar.temperatura > 39.2
+                          ? c.accentOrange
+                          : c.accentGreen,
+                    },
+                  ]}
+                >
+                  {colar.temperatura.toFixed(1)}
+                  <Text style={s.statCardUnidade}>°C</Text>
+                </Text>
+                <Text style={s.statCardSub}>Leitura simulada da coleira</Text>
+              </View>
+            </View>
+          </Entrada>
+        </View>
       </View>
     </View>
   );
@@ -4180,6 +4357,26 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       color: c.textSecondary,
       fontSize: fs(11),
       marginTop: 3,
+    },
+    statCardUnidade: {
+      fontSize: fs(13),
+      fontWeight: "600",
+    },
+
+    /* ---------- COLEIRA (POC / dados mockados) ---------- */
+    colarSecao: { marginTop: sp(18) },
+    colarTituloRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      marginBottom: sp(8),
+    },
+    colarTitulo: {
+      color: c.textSecondary,
+      fontSize: fs(10),
+      fontWeight: "700",
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
     },
 
     /* ---------- MODAL: DETALHE DOS ALERTAS ---------- */
