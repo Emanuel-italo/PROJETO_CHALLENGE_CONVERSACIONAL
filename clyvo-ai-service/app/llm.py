@@ -46,6 +46,8 @@ class LLMClient:
         messages: list[dict],
         model: str | None = None,
         timeout: float | None = None,
+        max_tokens: int | None = None,
+        json_mode: bool = True,
     ) -> dict:
 
         if not self.enabled:
@@ -56,7 +58,7 @@ class LLMClient:
         payload = {
             "model": modelo,
             "temperature": settings.llm_temperature,
-            "max_tokens": settings.llm_max_tokens,
+            "max_tokens": max_tokens or settings.llm_max_tokens,
             "messages": [
                 {
                     "role": "system",
@@ -64,11 +66,15 @@ class LLMClient:
                 },
                 *messages,
             ],
-            "response_format": {
-                "type": "json_object"
-            },
             "include_reasoning": False,
         }
+
+        # Alguns modelos (ex.: visão da Groq) rejeitam a própria geração no
+        # modo JSON estrito com "json_validate_failed" mesmo com prompt
+        # pedindo JSON. Nesses casos pedimos texto livre e extraímos o JSON
+        # no cliente (extract_json já sabe lidar com isso).
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
 
         url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
 

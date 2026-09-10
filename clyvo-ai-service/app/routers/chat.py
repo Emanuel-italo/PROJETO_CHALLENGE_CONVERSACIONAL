@@ -10,6 +10,9 @@ from ..schemas import ChatRequest, ChatResponse, SuggestedAction, Urgency
 from ..simulator import TERMOS_EMERGENCIA, _fold, simulate
 
 VISION_TIMEOUT_SECONDS = 45.0
+# O tier gratuito da Groq tem um teto de tokens de saída por minuto bem mais
+# apertado pros modelos de visão — resposta curta deixa mais margem.
+VISION_MAX_TOKENS = 400
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -72,14 +75,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
                 messages,
                 model=settings.vision_model if tem_imagem else None,
                 timeout=VISION_TIMEOUT_SECONDS if tem_imagem else None,
+                max_tokens=VISION_MAX_TOKENS if tem_imagem else None,
+                json_mode=not tem_imagem,
             )
         except LLMError as exc:
             logger.warning("Falha no LLM, caindo para modo simulado: %s", exc)
             if tem_imagem:
+                limite_atingido = "429" in str(exc) or "rate_limit" in str(exc)
                 raw = {
                     "reply": (
-                        "Não consegui analisar a foto agora. Tente de novo em "
-                        "instantes ou descreva o que você está vendo por texto."
+                        "Você atingiu o limite de análises de foto por agora. "
+                        "Aguarde cerca de 1 minuto e tente enviar de novo."
+                        if limite_atingido
+                        else "Não consegui analisar a foto agora. Tente de novo "
+                        "em instantes ou descreva o que você está vendo por texto."
                     ),
                     "urgency": Urgency.BAIXA.value,
                     "suggestedAction": SuggestedAction.NENHUMA.value,
