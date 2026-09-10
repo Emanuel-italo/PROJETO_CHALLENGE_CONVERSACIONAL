@@ -563,6 +563,60 @@ const TermometroIcon = memo(function TermometroIcon({
   );
 });
 
+/**
+ * Onda expandindo a partir do pino, tipo "radar" de localização ao vivo.
+ */
+const LocalizacaoPulso = memo(function LocalizacaoPulso({
+  cor,
+  reduceMotion,
+}: {
+  cor: string;
+  reduceMotion: boolean;
+}) {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (reduceMotion) return;
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 1800,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(anim, {
+          toValue: 0,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [reduceMotion, anim]);
+
+  const escala = anim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 2.4] });
+  const opacidade = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
+
+  if (reduceMotion) return null;
+
+  return (
+    <Animated.View
+      style={{
+        position: "absolute",
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        backgroundColor: cor,
+        transform: [{ scale: escala }],
+        opacity: opacidade,
+      }}
+    />
+  );
+});
+
 const DrawerPetAvatar = memo(function DrawerPetAvatar({
   pet,
   s,
@@ -2225,6 +2279,60 @@ export default function PetChatScreen() {
             </View>
           </Entrada>
         </View>
+      </View>
+
+      <View style={s.colarSecao}>
+        <View style={s.colarTituloRow}>
+          <Ionicons name="hardware-chip-outline" size={13} color={c.textSecondary} />
+          <Text style={s.colarTitulo}>Localização em tempo real · dado de exemplo (POC)</Text>
+        </View>
+
+        <Entrada disabled={reduceMotion} delay={cartoesPet.length * 80 + 160}>
+          <View style={s.mapaCard}>
+            <View style={s.mapaVisual}>
+              <LocalizacaoPulso
+                cor={colar.emCasa ? c.accentGreen : c.accentLight}
+                reduceMotion={reduceMotion}
+              />
+              <View
+                style={[
+                  s.mapaPino,
+                  { backgroundColor: colar.emCasa ? c.accentGreen : c.accentLight },
+                ]}
+              >
+                <Ionicons name="paw" size={13} color="#FFF" />
+              </View>
+            </View>
+
+            <View style={s.mapaInfo}>
+              <View style={s.mapaStatusRow}>
+                <View
+                  style={[
+                    s.mapaStatusDot,
+                    { backgroundColor: colar.emCasa ? c.accentGreen : c.accentLight },
+                  ]}
+                />
+                <Text
+                  style={[
+                    s.mapaStatusTexto,
+                    { color: colar.emCasa ? c.accentGreen : c.accentLight },
+                  ]}
+                >
+                  {colar.emCasa ? "Em casa" : "Fora de casa"}
+                </Text>
+              </View>
+              <Text style={s.mapaLocalTexto} numberOfLines={1}>
+                {colar.localReferencia}
+              </Text>
+              <Text style={s.mapaDistanciaTexto}>
+                {colar.distanciaM === 0
+                  ? "No local de casa"
+                  : `~${colar.distanciaM} m de casa`}
+              </Text>
+              <Text style={s.mapaAtualizadoTexto}>Atualizado agora</Text>
+            </View>
+          </View>
+        </Entrada>
       </View>
     </View>
   );
@@ -4377,6 +4485,54 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       fontWeight: "700",
       textTransform: "uppercase",
       letterSpacing: 0.4,
+    },
+    mapaCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: sp(12),
+      backgroundColor: c.card,
+      borderRadius: 16,
+      padding: sp(13),
+      borderWidth: 1,
+      borderColor: isDark ? c.border : overlay(0.05),
+    },
+    mapaVisual: {
+      width: 72,
+      height: 72,
+      borderRadius: 16,
+      backgroundColor: tint(0.09),
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+    },
+    mapaPino: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 2,
+      borderColor: c.card,
+    },
+    mapaInfo: { flex: 1, minWidth: 0 },
+    mapaStatusRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+    mapaStatusDot: { width: 7, height: 7, borderRadius: 4 },
+    mapaStatusTexto: { fontSize: fs(12), fontWeight: "700" },
+    mapaLocalTexto: {
+      color: c.text,
+      fontSize: fs(14),
+      fontWeight: "700",
+      marginTop: 3,
+    },
+    mapaDistanciaTexto: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      marginTop: 2,
+    },
+    mapaAtualizadoTexto: {
+      color: c.textLight,
+      fontSize: fs(10),
+      marginTop: 3,
     },
 
     /* ---------- MODAL: DETALHE DOS ALERTAS ---------- */
