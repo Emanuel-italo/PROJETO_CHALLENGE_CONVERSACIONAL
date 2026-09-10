@@ -31,7 +31,6 @@ import {
   Animated,
   Easing,
   FlatList,
-  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -56,12 +55,13 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
 
-import { RootStackParamList } from "../../types";
+import { Pet, RootStackParamList } from "../../types";
 import { usePets } from "../../hooks/usePets";
 import { useAiChat } from "../../hooks/useAiChat";
 import { usePetRisk } from "../../hooks/usePetRisk";
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
 import { useSpeechOutput } from "../../hooks/useSpeechOutput";
+import { useBreedPhoto } from "../../hooks/useBreedPhoto";
 import { ChatResult, SuggestedAction } from "../../services/AiService";
 import { DarkColors, LightColors, Theme, useTheme } from "../../styles/theme";
 import RichText from "../../components/RichText";
@@ -283,9 +283,13 @@ type Estilos = ReturnType<typeof makeStyles>;
 const Entrada = memo(function Entrada({
   children,
   disabled,
+  delay = 0,
+  style,
 }: {
   children: React.ReactNode;
   disabled: boolean;
+  delay?: number;
+  style?: any;
 }) {
   const anim = useRef(new Animated.Value(disabled ? 1 : 0)).current;
 
@@ -295,28 +299,160 @@ const Entrada = memo(function Entrada({
       toValue: 1,
       tension: 60,
       friction: 9,
+      delay,
       useNativeDriver: true,
     }).start();
-  }, [disabled, anim]);
+  }, [disabled, delay, anim]);
 
-  if (disabled) return <>{children}</>;
+  if (disabled) return <View style={style}>{children}</View>;
 
   return (
     <Animated.View
-      style={{
-        opacity: anim,
-        transform: [
-          {
-            translateY: anim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [14, 0],
-            }),
-          },
-        ],
-      }}
+      style={[
+        style,
+        {
+          opacity: anim,
+          transform: [
+            {
+              translateY: anim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [14, 0],
+              }),
+            },
+          ],
+        },
+      ]}
     >
       {children}
     </Animated.View>
+  );
+});
+
+/**
+ * Encolhe levemente no toque e volta com uma mola — dá feedback tátil
+ * a cartões e botões sem precisar reimplementar o gesto em cada lugar.
+ */
+const Toque = memo(function Toque({
+  children,
+  onPress,
+  style,
+  disabled,
+  reduceMotion,
+  accessibilityLabel,
+  accessibilityRole = "button",
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  style?: any;
+  disabled?: boolean;
+  reduceMotion: boolean;
+  accessibilityLabel?: string;
+  accessibilityRole?: "button";
+}) {
+  const escala = useRef(new Animated.Value(1)).current;
+
+  const aoPressionar = useCallback(() => {
+    if (reduceMotion) return;
+    Animated.spring(escala, {
+      toValue: 0.95,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 0,
+    }).start();
+  }, [escala, reduceMotion]);
+
+  const aoSoltar = useCallback(() => {
+    if (reduceMotion) return;
+    Animated.spring(escala, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 18,
+      bounciness: 9,
+    }).start();
+  }, [escala, reduceMotion]);
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={aoPressionar}
+      onPressOut={aoSoltar}
+      disabled={disabled}
+      accessibilityRole={accessibilityRole}
+      accessibilityLabel={accessibilityLabel}
+      style={style}
+    >
+      <Animated.View style={{ transform: [{ scale: escala }] }}>
+        {children}
+      </Animated.View>
+    </Pressable>
+  );
+});
+
+/**
+ * Imagem que surge com um fade suave quando termina de carregar, em vez
+ * de aparecer de uma vez (mais notável nas fotos de raça vindas da rede).
+ */
+const FotoComFade = memo(function FotoComFade({
+  uri,
+  style,
+  reduceMotion,
+}: {
+  uri: string;
+  style: any;
+  reduceMotion: boolean;
+}) {
+  const opacidade = useRef(new Animated.Value(reduceMotion ? 1 : 0)).current;
+
+  return (
+    <Animated.Image
+      source={{ uri }}
+      style={[style, { opacity: opacidade }]}
+      onLoad={() => {
+        if (reduceMotion) return;
+        Animated.timing(opacidade, {
+          toValue: 1,
+          duration: 380,
+          useNativeDriver: true,
+        }).start();
+      }}
+    />
+  );
+});
+
+/**
+ * Miniatura do pet na lista do menu: foto própria se houver, senão uma
+ * foto real da raça (busca sob demanda), com ícone de pata como último
+ * recurso.
+ */
+const DrawerPetAvatar = memo(function DrawerPetAvatar({
+  pet,
+  s,
+  cor,
+  reduceMotion,
+}: {
+  pet: Pet;
+  s: Estilos;
+  cor: string;
+  reduceMotion: boolean;
+}) {
+  const fotoRaca = useBreedPhoto(pet);
+
+  const foto =
+    (pet as any)?.imageUri ??
+    (pet as any)?.photoUri ??
+    (pet as any)?.image ??
+    (pet as any)?.photo ??
+    fotoRaca ??
+    null;
+
+  return (
+    <View style={s.drawerPetThumbBox}>
+      {foto ? (
+        <FotoComFade uri={foto} style={s.drawerPetThumb} reduceMotion={reduceMotion} />
+      ) : (
+        <Ionicons name="paw-outline" size={18} color={cor} />
+      )}
+    </View>
   );
 });
 
@@ -927,11 +1063,14 @@ export default function PetChatScreen() {
     messages.length > 0 && messages[messages.length - 1].role === "assistant";
   const mostrarAlertas = !sending && ultimaEhDaIa && alertasVisiveis.length > 0;
 
+  const fotoRaca = useBreedPhoto(pet);
+
   const petImage =
     (pet as any)?.imageUri ??
     (pet as any)?.photoUri ??
     (pet as any)?.image ??
     (pet as any)?.photo ??
+    fotoRaca ??
     null;
 
   const podeEnviar = input.trim().length > 0 && !sending;
@@ -1046,12 +1185,14 @@ export default function PetChatScreen() {
                   if (!sidebarFixa) setDrawerAberto(false);
                 }}
               >
-                <Ionicons
-                  name="paw-outline"
-                  size={18}
-                  color={ativo ? c.accentLight : c.textSecondary}
-                  style={s.drawerItemIcon}
-                />
+                <View style={s.drawerItemIcon}>
+                  <DrawerPetAvatar
+                    pet={p}
+                    s={s}
+                    cor={ativo ? c.accentLight : c.textSecondary}
+                    reduceMotion={reduceMotion}
+                  />
+                </View>
                 <Text
                   style={[s.drawerItemText, ativo && s.drawerItemTextAtivo]}
                   numberOfLines={1}
@@ -1136,7 +1277,11 @@ export default function PetChatScreen() {
             style={[s.heroAvatar, { transform: [{ scale: avatarPulse }] }]}
           >
             {petImage ? (
-              <Image source={{ uri: petImage }} style={s.heroPetImage} />
+              <FotoComFade
+                uri={petImage}
+                style={s.heroPetImage}
+                reduceMotion={reduceMotion}
+              />
             ) : (
               <Ionicons name="sparkles" size={r.fs(38)} color={c.accentLight} />
             )}
@@ -1169,10 +1314,10 @@ export default function PetChatScreen() {
         </View>
       </View>
 
-      <Pressable
-        style={({ pressed }) => [s.triageLaunch, pressed && s.pressed]}
+      <Toque
+        style={s.triageLaunch}
         onPress={() => setShowTriage(true)}
-        accessibilityRole="button"
+        reduceMotion={reduceMotion}
         accessibilityLabel="Iniciar triagem de sintomas"
       >
         <View style={s.triageLaunchIcon}>
@@ -1185,7 +1330,7 @@ export default function PetChatScreen() {
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={20} color={c.white} />
-      </Pressable>
+      </Toque>
 
       {showSuggestions && (
         <View style={s.suggestionsContainer}>
@@ -1203,24 +1348,25 @@ export default function PetChatScreen() {
           </View>
 
           <View style={s.suggestionsGrid}>
-            {SUGESTOES.map((sug) => (
-              <Pressable
-                key={sug.text}
-                style={({ pressed }) => [s.suggestionCard, pressed && s.pressed]}
-                onPress={() => handleSend(sug.text)}
-                accessibilityRole="button"
-              >
-                <View style={s.suggestionIcon}>
-                  <Ionicons name={sug.icon} size={18} color={c.accentLight} />
-                </View>
-                <Text style={s.suggestionText}>{sug.text}</Text>
-                <Ionicons
-                  name="arrow-forward"
-                  size={15}
-                  color={c.accentLight}
-                  style={s.suggestionArrow}
-                />
-              </Pressable>
+            {SUGESTOES.map((sug, i) => (
+              <Entrada key={sug.text} disabled={reduceMotion} delay={i * 70} style={s.suggestionCard}>
+                <Toque
+                  style={s.toqueFillRow}
+                  onPress={() => handleSend(sug.text)}
+                  reduceMotion={reduceMotion}
+                >
+                  <View style={s.suggestionIcon}>
+                    <Ionicons name={sug.icon} size={18} color={c.accentLight} />
+                  </View>
+                  <Text style={s.suggestionText}>{sug.text}</Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={15}
+                    color={c.accentLight}
+                    style={s.suggestionArrow}
+                  />
+                </Toque>
+              </Entrada>
             ))}
           </View>
         </View>
@@ -1441,17 +1587,19 @@ export default function PetChatScreen() {
       </View>
 
       <View style={s.statsCardsWrap}>
-        {cartoesPet.map((card) => (
-          <View key={card.label} style={s.statCard}>
-            <View style={[s.statCardIcon, { backgroundColor: `${card.cor}22` }]}>
-              <Ionicons name={card.icon} size={16} color={card.cor} />
+        {cartoesPet.map((card, i) => (
+          <Entrada key={card.label} disabled={reduceMotion} delay={i * 80}>
+            <View style={s.statCard}>
+              <View style={[s.statCardIcon, { backgroundColor: `${card.cor}22` }]}>
+                <Ionicons name={card.icon} size={16} color={card.cor} />
+              </View>
+              <Text style={s.statCardValue}>{card.valor}</Text>
+              <Text style={s.statCardLabel}>{card.label}</Text>
+              <Text style={s.statCardSub} numberOfLines={1}>
+                {card.sub}
+              </Text>
             </View>
-            <Text style={s.statCardValue}>{card.valor}</Text>
-            <Text style={s.statCardLabel}>{card.label}</Text>
-            <Text style={s.statCardSub} numberOfLines={1}>
-              {card.sub}
-            </Text>
-          </View>
+          </Entrada>
         ))}
       </View>
     </View>
@@ -1544,7 +1692,11 @@ export default function PetChatScreen() {
               style={[s.headerAvatar, { transform: [{ scale: avatarPulse }] }]}
             >
               {petImage ? (
-                <Image source={{ uri: petImage }} style={s.petImage} />
+                <FotoComFade
+                  uri={petImage}
+                  style={s.petImage}
+                  reduceMotion={reduceMotion}
+                />
               ) : (
                 <Ionicons name="paw" size={20} color={c.white} />
               )}
@@ -1701,38 +1853,34 @@ export default function PetChatScreen() {
 
               <View style={s.quickRow}>
                 {ACOES_RAPIDAS.map((a) => (
-                  <Pressable
+                  <Toque
                     key={a.action}
-                    style={({ pressed }) => [s.quickCard, pressed && s.pressed]}
+                    style={s.quickCard}
                     onPress={() => handleQuickAction(a.action)}
-                    accessibilityRole="button"
+                    reduceMotion={reduceMotion}
                   >
                     <View style={s.quickIcon}>
                       <Ionicons name={a.icon} size={19} color={c.accentLight} />
                     </View>
                     <Text style={s.quickTitle}>{a.title}</Text>
                     <Text style={s.quickSubtitle}>{a.subtitle}</Text>
-                  </Pressable>
+                  </Toque>
                 ))}
 
-                <Pressable
-                  style={({ pressed }) => [
-                    s.quickCard,
-                    s.quickCardDestaque,
-                    pressed && s.pressed,
-                  ]}
+                <Toque
+                  style={[s.quickCard, s.quickCardDestaque]}
                   onPress={() => {
                     setShowQuickActions(false);
                     setShowTriage(true);
                   }}
-                  accessibilityRole="button"
+                  reduceMotion={reduceMotion}
                 >
                   <View style={s.quickIcon}>
                     <Ionicons name="pulse-outline" size={19} color={c.accentLight} />
                   </View>
                   <Text style={s.quickTitle}>Triagem</Text>
                   <Text style={s.quickSubtitle}>Avaliar sintoma</Text>
-                </Pressable>
+                </Toque>
               </View>
             </View>
           </View>
@@ -1782,15 +1930,15 @@ export default function PetChatScreen() {
 
               <View style={s.triageGrid}>
                 {SINTOMAS.map((sintoma) => (
-                  <Pressable
+                  <Toque
                     key={sintoma.termo}
-                    style={({ pressed }) => [s.triageItem, pressed && s.pressed]}
+                    style={s.triageItem}
                     onPress={() => handleTriage(sintoma.termo)}
-                    accessibilityRole="button"
+                    reduceMotion={reduceMotion}
                   >
                     <Text style={s.triageEmoji}>{sintoma.emoji}</Text>
                     <Text style={s.triageItemText}>{sintoma.label}</Text>
-                  </Pressable>
+                  </Toque>
                 ))}
               </View>
             </View>
@@ -2303,6 +2451,15 @@ const makeStyles = (theme: Theme, r: Metrics) => {
     },
     drawerItemAtivo: { backgroundColor: drawerAtivo },
     drawerItemIcon: { marginRight: sp(13) },
+    drawerPetThumbBox: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
+    },
+    drawerPetThumb: { width: 22, height: 22, borderRadius: 11 },
     drawerItemText: {
       color: c.textSecondary,
       fontSize: fs(14),
@@ -2981,6 +3138,8 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       backgroundColor: c.accentRed,
       shadowColor: c.accentRed,
     },
+    toqueFillRow: { flex: 1, flexDirection: "row", alignItems: "center" },
+    toqueFillColumn: { flex: 1 },
 
     /* ---------- PAINEL: NÚMEROS DO PET ---------- */
     statsPanelFixo: {
