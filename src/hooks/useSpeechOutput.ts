@@ -4,6 +4,11 @@
 // personalizada (ElevenLabs, via backend); se o backend não tiver TTS
 // configurado ou a chamada falhar, cai para a voz nativa do
 // dispositivo/navegador (expo-speech), pra nunca ficar mudo.
+//
+// Quando a voz personalizada funciona, `falar()` devolve a URI do áudio
+// gerado — a tela guarda essa URI na própria mensagem, pra virar uma
+// "nota de voz" replayável (igual à mensagem que o tutor manda por voz),
+// em vez de precisar sintetizar de novo a cada replay.
 
 import { useCallback, useRef, useState } from "react";
 import { Platform } from "react-native";
@@ -21,14 +26,16 @@ function limparParaFala(texto: string): string {
     .trim();
 }
 
+export type ResultadoFala = { uri: string | null };
+
 export function useSpeechOutput() {
   const [vozAtiva, setVozAtiva] = useState(true);
   const [falando, setFalando] = useState(false);
 
   const playerRef = useRef<AudioPlayer | null>(null);
-  const arquivoTempRef = useRef<File | null>(null);
 
-  const limparPlayer = useCallback(() => {
+  const pararFala = useCallback(() => {
+    Speech.stop();
     if (playerRef.current) {
       try {
         playerRef.current.remove();
@@ -37,22 +44,8 @@ export function useSpeechOutput() {
       }
       playerRef.current = null;
     }
-
-    if (arquivoTempRef.current) {
-      try {
-        arquivoTempRef.current.delete();
-      } catch {
-        /* arquivo temporário, tanto faz se falhar */
-      }
-      arquivoTempRef.current = null;
-    }
-  }, []);
-
-  const pararFala = useCallback(() => {
-    Speech.stop();
-    limparPlayer();
     setFalando(false);
-  }, [limparPlayer]);
+  }, []);
 
   const falarComVozDoDispositivo = useCallback((texto: string) => {
     Speech.speak(texto, {
@@ -64,11 +57,11 @@ export function useSpeechOutput() {
   }, []);
 
   const falar = useCallback(
-    async (texto: string) => {
-      if (!vozAtiva) return;
+    async (texto: string): Promise<ResultadoFala> => {
+      if (!vozAtiva) return { uri: null };
 
       const limpo = limparParaFala(texto);
-      if (!limpo) return;
+      if (!limpo) return { uri: null };
 
       pararFala();
       setFalando(true);
@@ -86,10 +79,12 @@ export function useSpeechOutput() {
           uri = URL.createObjectURL(blob);
         } else {
           const bytes = new Uint8Array(await resposta.arrayBuffer());
+          // Não guardamos referência pra apagar depois: esse arquivo vira
+          // o áudio permanente da mensagem (replay não deve exigir apagar
+          // e regravar). É um cache efêmero — o SO pode limpá-lo eventualmente.
           const arquivo = new File(Paths.cache, `clyvo-tts-${Date.now()}.mp3`);
           arquivo.create();
           arquivo.write(bytes);
-          arquivoTempRef.current = arquivo;
           uri = arquivo.uri;
         }
 
@@ -99,18 +94,20 @@ export function useSpeechOutput() {
         player.addListener("playbackStatusUpdate", (status) => {
           if (status.didJustFinish) {
             setFalando(false);
-            limparPlayer();
           }
         });
 
         player.play();
+        return { uri };
       } catch {
         // Backend sem ElevenLabs configurado, sem internet, etc.
         // Não deixa o tutor sem resposta em voz: usa a voz do aparelho.
+        // (Sem URI reaproveitável — a voz do sistema não gera um arquivo.)
         falarComVozDoDispositivo(limpo);
+        return { uri: null };
       }
     },
-    [vozAtiva, pararFala, limparPlayer, falarComVozDoDispositivo],
+    [vozAtiva, pararFala, falarComVozDoDispositivo],
   );
 
   const alternarVoz = useCallback(() => {

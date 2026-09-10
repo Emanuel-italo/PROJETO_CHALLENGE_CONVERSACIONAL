@@ -13,7 +13,7 @@ import { ChatMessage, useChatHistory } from "./useChatHistory";
  * A tela não conhece HTTP: toda a integração fica neste hook e no AiService.
  */
 export function useAiChat(pet: Pet | null) {
-  const { messages, addMessage, clearHistory, loading } = useChatHistory();
+  const { messages, addMessage, updateMessage, clearHistory, loading } = useChatHistory();
   const [lastResult, setLastResult] = useState<ChatResult | null>(null);
 
   const mutation = useMutation({
@@ -54,6 +54,17 @@ export function useAiChat(pet: Pet | null) {
     [addMessage, mutation],
   );
 
+  const sendAudio = useCallback(
+    async (text: string, audioUri: string, audioDuration: number) => {
+      const trimmed = text.trim();
+      if (!trimmed || mutation.isPending) return;
+
+      await addMessage({ role: "user", content: trimmed, audioUri, audioDuration });
+      mutation.mutate(trimmed);
+    },
+    [addMessage, mutation],
+  );
+
   const reset = useCallback(async () => {
     setLastResult(null);
     await clearHistory();
@@ -66,6 +77,8 @@ export function useAiChat(pet: Pet | null) {
     error: mutation.error as Error | null,
     lastResult,
     send,
+    sendAudio,
+    updateMessage,
     reset,
   };
 }

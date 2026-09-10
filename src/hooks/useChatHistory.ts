@@ -3,11 +3,21 @@ import { useCallback, useEffect, useState } from "react";
 import { storageService } from "../services/StorageService";
 
 export type ChatMessage = {
+  id?: string;
   role: "user" | "assistant";
   content: string;
+  /** Presente quando a mensagem tem áudio tocável (enviado por voz, ou a
+   * resposta da IA sintetizada em voz). */
+  audioUri?: string;
+  /** Duração aproximada em segundos, usada antes do player carregar. */
+  audioDuration?: number;
 };
 
 const CHAT_KEY = "@clyvo:chat_history";
+
+function gerarId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 export function useChatHistory() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -38,15 +48,31 @@ export function useChatHistory() {
   }, [load]);
 
   const addMessage = useCallback(async (message: ChatMessage) => {
+    const comId: ChatMessage = { ...message, id: message.id ?? gerarId() };
     let updated: ChatMessage[] = [];
 
     setMessages((current) => {
-      updated = [...current, message];
+      updated = [...current, comId];
       return updated;
     });
 
     await storageService.saveData(CHAT_KEY, JSON.stringify(updated));
+    return comId;
   }, []);
+
+  const updateMessage = useCallback(
+    async (id: string, patch: Partial<ChatMessage>) => {
+      let updated: ChatMessage[] = [];
+
+      setMessages((current) => {
+        updated = current.map((m) => (m.id === id ? { ...m, ...patch } : m));
+        return updated;
+      });
+
+      await storageService.saveData(CHAT_KEY, JSON.stringify(updated));
+    },
+    [],
+  );
 
   const clearHistory = useCallback(async () => {
     setMessages([]);
@@ -59,6 +85,7 @@ export function useChatHistory() {
     error,
     setMessages,
     addMessage,
+    updateMessage,
     clearHistory,
   };
 }

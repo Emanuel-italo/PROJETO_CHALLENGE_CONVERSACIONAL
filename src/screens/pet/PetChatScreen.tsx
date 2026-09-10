@@ -33,6 +33,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -54,6 +55,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
+import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 
 import { Pet, RootStackParamList } from "../../types";
 import { usePets } from "../../hooks/usePets";
@@ -77,8 +79,11 @@ type IconName = React.ComponentProps<typeof Ionicons>["name"];
 type Feedback = Record<number, "like" | "dislike">;
 
 type ChatMessage = {
+  id?: string;
   role: "user" | "assistant";
   content: string;
+  audioUri?: string;
+  audioDuration?: number;
 };
 
 /** Métricas calculadas uma vez por mudança de viewport. */
@@ -145,22 +150,49 @@ const ACOES_RAPIDAS: {
   },
 ];
 
-const SINTOMAS: { emoji: string; label: string; termo: string }[] = [
-  { emoji: "🤢", label: "Vômito", termo: "vomitando" },
-  { emoji: "💧", label: "Diarreia", termo: "com diarreia" },
-  { emoji: "🍖", label: "Apetite", termo: "sem querer comer" },
-  { emoji: "🩹", label: "Dor", termo: "com dor" },
-];
-
-const CONVERSAS_RECENTES = [
-  "Dúvida sobre vacinação",
-  "Ele está comendo menos",
-  "Análise de exame de sangue",
-  "Manchas na pele perto da orelha",
-  "Agendamento de banho e tosa",
+const SINTOMAS: { icon: IconName; label: string; termo: string }[] = [
+  { icon: "sad-outline", label: "Vômito", termo: "vomitando" },
+  { icon: "water-outline", label: "Diarreia", termo: "com diarreia" },
+  { icon: "restaurant-outline", label: "Apetite", termo: "sem querer comer" },
+  { icon: "body-outline", label: "Dor", termo: "com dor" },
 ];
 
 const LIMITE_CARACTERES = 1000;
+
+/** Multiplicadores fixos pra dar variação natural às barras de nível de
+ * voz — todas sobem/descem juntas com o volume real, só a proporção varia. */
+const NIVEL_MULTIPLICADORES = [0.5, 0.85, 1, 0.6, 0.9, 0.7, 1, 0.55, 0.8, 0.65];
+
+/** mm:ss a partir de segundos (arredonda, nunca fica negativo). */
+function formatarTempoAudio(segundos: number): string {
+  const total = Math.max(0, Math.round(segundos || 0));
+  const min = Math.floor(total / 60);
+  const seg = total % 60;
+  return `${min}:${seg.toString().padStart(2, "0")}`;
+}
+
+/**
+ * "Forma de onda" fake, porém estável: mesma URI sempre gera as mesmas
+ * barras (não é a onda real do áudio — analisar o PCM custaria caro à
+ * toa aqui —, mas dá a sensação visual de uma mensagem de voz do WhatsApp).
+ */
+function gerarBarrasOnda(semente: string, quantidade = 26): number[] {
+  let h = 0;
+  for (let i = 0; i < semente.length; i++) {
+    h = (h * 31 + semente.charCodeAt(i)) >>> 0;
+  }
+  let x = h || 1;
+  const barras: number[] = [];
+  for (let i = 0; i < quantidade; i++) {
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    x >>>= 0;
+    barras.push(0.3 + ((x % 1000) / 1000) * 0.7);
+  }
+  return barras;
+}
 
 /* ============================================================
    HOOKS DE APOIO
@@ -336,6 +368,7 @@ const Toque = memo(function Toque({
   children,
   onPress,
   style,
+  contentStyle,
   disabled,
   reduceMotion,
   accessibilityLabel,
@@ -344,6 +377,10 @@ const Toque = memo(function Toque({
   children: React.ReactNode;
   onPress?: () => void;
   style?: any;
+  /** Estilo do container que envolve `children` de fato (onde flexDirection
+   * de fato importa) — `style` fica só no Pressable externo, que cuida do
+   * tamanho/fundo, mas não é o pai direto dos filhos. */
+  contentStyle?: any;
   disabled?: boolean;
   reduceMotion: boolean;
   accessibilityLabel?: string;
@@ -381,7 +418,7 @@ const Toque = memo(function Toque({
       accessibilityLabel={accessibilityLabel}
       style={style}
     >
-      <Animated.View style={{ transform: [{ scale: escala }] }}>
+      <Animated.View style={[contentStyle, { transform: [{ scale: escala }] }]}>
         {children}
       </Animated.View>
     </Pressable>
@@ -457,6 +494,98 @@ const DrawerPetAvatar = memo(function DrawerPetAvatar({
 });
 
 /**
+ * Balão de mensagem de voz, no estilo "nota de voz" do WhatsApp: botão
+ * de play/pausa, barrinhas de onda (visuais, não a onda real) e duração.
+ */
+const AudioMessageBubble = memo(function AudioMessageBubble({
+  uri,
+  duracaoAproximada,
+  s,
+  variante = "user",
+  corAccent,
+}: {
+  uri: string;
+  duracaoAproximada: number;
+  s: Estilos;
+  /** "user" = balão escuro (elementos claros); "assistant" = balão claro
+   * do cartão de IA (elementos na cor de destaque do tema). */
+  variante?: "user" | "assistant";
+  /** Cor de destaque usada na variante "assistant" (padrão: azul do tema). */
+  corAccent?: string;
+}) {
+  const player = useAudioPlayer(uri);
+  const status = useAudioPlayerStatus(player);
+
+  const duracaoTotal =
+    status.duration > 0 ? status.duration : duracaoAproximada;
+  const progresso =
+    duracaoTotal > 0 ? Math.min(1, status.currentTime / duracaoTotal) : 0;
+
+  const barras = useMemo(() => gerarBarrasOnda(uri), [uri]);
+
+  const alternar = useCallback(() => {
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    if (status.didJustFinish || status.currentTime >= duracaoTotal - 0.05) {
+      player.seekTo(0);
+    }
+    player.play();
+  }, [player, status.playing, status.didJustFinish, status.currentTime, duracaoTotal]);
+
+  const semAudio = !status.isLoaded && status.duration === 0 && !status.playing;
+
+  const tempoExibido = formatarTempoAudio(
+    status.playing || status.currentTime > 0 ? status.currentTime : duracaoTotal,
+  );
+
+  const ehAssistente = variante === "assistant";
+  const cor = corAccent ?? "#4A9EFF";
+
+  return (
+    <View style={s.audioBubble}>
+      <Pressable
+        onPress={alternar}
+        style={[
+          s.audioBubbleBotao,
+          ehAssistente && { backgroundColor: cor },
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={status.playing ? "Pausar áudio" : "Reproduzir áudio"}
+      >
+        <Ionicons name={status.playing ? "pause" : "play"} size={15} color="#FFF" />
+      </Pressable>
+
+      <View style={s.audioBubbleOnda}>
+        {barras.map((altura, i) => (
+          <View
+            key={i}
+            style={[
+              s.audioBubbleBarra,
+              {
+                height: 3 + altura * 13,
+                backgroundColor: ehAssistente
+                  ? i / barras.length <= progresso
+                    ? cor
+                    : `${cor}33`
+                  : i / barras.length <= progresso
+                    ? "rgba(255,255,255,0.95)"
+                    : "rgba(255,255,255,0.32)",
+              },
+            ]}
+          />
+        ))}
+      </View>
+
+      <Text style={[s.audioBubbleTempo, ehAssistente && { color: cor }]}>
+        {semAudio ? "áudio" : tempoExibido}
+      </Text>
+    </View>
+  );
+});
+
+/**
  * Um balão de mensagem. Memoizado para que o streaming da última
  * mensagem não force o re-render de todo o histórico.
  */
@@ -488,6 +617,7 @@ const Bolha = memo(
   }) {
     const c = theme.colors;
     const isUser = msg.role === "user";
+    const [mostrarTexto, setMostrarTexto] = useState(false);
 
     return (
       <Entrada disabled={semAnimacao}>
@@ -510,9 +640,17 @@ const Bolha = memo(
 
             <View style={isUser ? s.userBubble : s.aiBubble}>
               {isUser ? (
-                <Text style={s.userText} selectable>
-                  {msg.content}
-                </Text>
+                msg.audioUri ? (
+                  <AudioMessageBubble
+                    uri={msg.audioUri}
+                    duracaoAproximada={msg.audioDuration ?? 0}
+                    s={s}
+                  />
+                ) : (
+                  <Text style={s.userText} selectable>
+                    {msg.content}
+                  </Text>
+                )
               ) : (
                 <>
                   {tagUrgencia && (
@@ -538,12 +676,50 @@ const Bolha = memo(
                     </View>
                   )}
 
-                  <RichText
-                    content={texto}
-                    style={s.aiText}
-                    accentColor={c.accentLight}
-                    codeBackground={theme.tint(0.12)}
-                  />
+                  {msg.audioUri ? (
+                    <>
+                      <AudioMessageBubble
+                        uri={msg.audioUri}
+                        duracaoAproximada={msg.audioDuration ?? 0}
+                        s={s}
+                        variante="assistant"
+                        corAccent={c.accentLight}
+                      />
+                      <Pressable
+                        onPress={() => setMostrarTexto((v) => !v)}
+                        style={s.audioTranscricaoToggle}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          mostrarTexto ? "Ocultar transcrição" : "Ver transcrição"
+                        }
+                      >
+                        <Ionicons
+                          name={mostrarTexto ? "chevron-up" : "chevron-down"}
+                          size={12}
+                          color={c.accentLight}
+                        />
+                        <Text style={s.audioTranscricaoToggleTexto}>
+                          {mostrarTexto ? "Ocultar transcrição" : "Ver transcrição"}
+                        </Text>
+                      </Pressable>
+                      {mostrarTexto && (
+                        <RichText
+                          content={texto}
+                          style={[s.aiText, s.audioTranscricaoTexto]}
+                          accentColor={c.accentLight}
+                          codeBackground={theme.tint(0.12)}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <RichText
+                      content={texto}
+                      style={s.aiText}
+                      accentColor={c.accentLight}
+                      codeBackground={theme.tint(0.12)}
+                    />
+                  )}
 
                   {mostrarCursor && <View style={s.cursor} />}
                 </>
@@ -666,7 +842,8 @@ export default function PetChatScreen() {
     if (!selectedPetId && pets.length) setSelectedPetId(pets[0].id);
   }, [pets, selectedPetId]);
 
-  const { messages, sending, lastResult, send, reset } = useAiChat(pet);
+  const { messages, sending, lastResult, send, sendAudio, updateMessage, reset } =
+    useAiChat(pet);
   const { data: risk } = usePetRisk(pet);
 
   /* ---------- voz ---------- */
@@ -684,6 +861,10 @@ export default function PetChatScreen() {
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showTriage, setShowTriage] = useState(false);
   const [showPetStats, setShowPetStats] = useState(false);
+  const [showAlertsDetail, setShowAlertsDetail] = useState(false);
+  const [buscaAberta, setBuscaAberta] = useState(false);
+  const [termoBusca, setTermoBusca] = useState("");
+  const [indiceResultado, setIndiceResultado] = useState(0);
   const [drawerAberto, setDrawerAberto] = useState(false);
   const [sidebarVisivel, setSidebarVisivel] = useState(true);
   const [feedbacks, setFeedbacks] = useState<Feedback>({});
@@ -705,6 +886,7 @@ export default function PetChatScreen() {
   const welcomeScale = useRef(new Animated.Value(0.94)).current;
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
   const typingAnim = useRef(new Animated.Value(0)).current;
+  const gravacaoPulse = useRef(new Animated.Value(1)).current;
   const triageAnim = useRef(new Animated.Value(0)).current;
   const scrollBtnAnim = useRef(new Animated.Value(0)).current;
   const drawerAnim = useRef(new Animated.Value(0)).current;
@@ -798,6 +980,31 @@ export default function PetChatScreen() {
   }, [sending, reduceMotion, typingAnim]);
 
   useEffect(() => {
+    if (!voz.gravando || reduceMotion) {
+      gravacaoPulse.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(gravacaoPulse, {
+          toValue: 0.3,
+          duration: 550,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(gravacaoPulse, {
+          toValue: 1,
+          duration: 550,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [voz.gravando, reduceMotion, gravacaoPulse]);
+
+  useEffect(() => {
     if (!showTriage) return;
     triageAnim.setValue(0);
     Animated.spring(triageAnim, {
@@ -858,7 +1065,12 @@ export default function PetChatScreen() {
     if (streamIndexRef.current === indice) return;
 
     streamIndexRef.current = indice;
-    fala.falar(ultima.content);
+    const idMensagemFalada = ultima.id;
+    fala.falar(ultima.content).then((resultado) => {
+      if (resultado.uri && idMensagemFalada) {
+        updateMessage(idMensagemFalada, { audioUri: resultado.uri });
+      }
+    });
 
     if (reduceMotion) {
       setStreamedText(ultima.content);
@@ -881,7 +1093,7 @@ export default function PetChatScreen() {
     }, 32);
 
     return () => clearInterval(timer);
-  }, [messages, reduceMotion, fala.falar]);
+  }, [messages, reduceMotion, fala.falar, updateMessage]);
 
   /* ---------- rolagem ---------- */
 
@@ -900,6 +1112,54 @@ export default function PetChatScreen() {
   const aoMudarTamanho = useCallback(() => {
     if (noFimRef.current) irParaOFim(true);
   }, [irParaOFim]);
+
+  /* ---------- busca na conversa ---------- */
+
+  const resultadosBusca = useMemo(() => {
+    const termo = termoBusca.trim().toLowerCase();
+    if (!termo) return [] as number[];
+    const indices: number[] = [];
+    messages.forEach((m, i) => {
+      if (m.content.toLowerCase().includes(termo)) indices.push(i);
+    });
+    return indices;
+  }, [messages, termoBusca]);
+
+  useEffect(() => {
+    setIndiceResultado(0);
+  }, [termoBusca]);
+
+  const irParaResultado = useCallback(
+    (novoIndice: number) => {
+      if (!resultadosBusca.length) return;
+      const seguro =
+        ((novoIndice % resultadosBusca.length) + resultadosBusca.length) %
+        resultadosBusca.length;
+      setIndiceResultado(seguro);
+      listRef.current?.scrollToIndex({
+        index: resultadosBusca[seguro],
+        animated: true,
+        viewPosition: 0.3,
+      });
+    },
+    [resultadosBusca],
+  );
+
+  useEffect(() => {
+    if (resultadosBusca.length) irParaResultado(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultadosBusca.length > 0 ? resultadosBusca[0] : -1]);
+
+  const fecharBusca = useCallback(() => {
+    setBuscaAberta(false);
+    setTermoBusca("");
+  }, []);
+
+  const aoFalharScrollBusca = useCallback((info: { index: number }) => {
+    setTimeout(() => {
+      listRef.current?.scrollToIndex({ index: info.index, animated: true });
+    }, 120);
+  }, []);
 
   /* ---------- ações ---------- */
 
@@ -922,13 +1182,30 @@ export default function PetChatScreen() {
     [input, sending, send, sidebarFixa],
   );
 
+  const handleSendVoice = useCallback(
+    async (texto: string, audioUri: string, duracao: number) => {
+      const conteudo = texto.trim();
+      if (!conteudo || sending) return;
+
+      setShowSuggestions(false);
+      setShowQuickActions(false);
+      setShowTriage(false);
+      if (!sidebarFixa) setDrawerAberto(false);
+      noFimRef.current = true;
+      Keyboard.dismiss();
+
+      await sendAudio(conteudo, audioUri, duracao);
+    },
+    [sending, sendAudio, sidebarFixa],
+  );
+
   const handleMicPress = useCallback(async () => {
     if (sending || voz.transcrevendo) return;
 
     if (voz.gravando) {
-      const { texto, erro } = await voz.parar();
-      if (texto) {
-        await handleSend(texto);
+      const { texto, erro, uri, duracao } = await voz.parar();
+      if (texto && uri) {
+        await handleSendVoice(texto, uri, duracao);
       } else if (erro) {
         showAlert("Não deu para entender o áudio", erro);
       }
@@ -940,7 +1217,11 @@ export default function PetChatScreen() {
     if (!ok && erro) {
       showAlert("Microfone indisponível", erro);
     }
-  }, [sending, voz, fala, handleSend]);
+  }, [sending, voz, fala, handleSendVoice]);
+
+  const handleCancelarGravacao = useCallback(() => {
+    voz.cancelar();
+  }, [voz]);
 
   const handleClearChat = useCallback(() => {
     if (!messages.length) return;
@@ -1112,7 +1393,15 @@ export default function PetChatScreen() {
           <Pressable style={[s.drawerSegmentBtn, s.drawerSegmentBtnAtivo]}>
             <Text style={s.drawerSegmentTextAtivo}>Conversa</Text>
           </Pressable>
-          <Pressable style={s.drawerSegmentBtn}>
+          <Pressable
+            style={s.drawerSegmentBtn}
+            onPress={() =>
+              showAlert(
+                "Em breve",
+                "O modo Clínica ainda está em desenvolvimento.",
+              )
+            }
+          >
             <Text style={s.drawerSegmentText}>Clínica</Text>
             <View style={s.betaBadge}>
               <Text style={s.betaBadgeText}>Beta</Text>
@@ -1138,7 +1427,14 @@ export default function PetChatScreen() {
             <Text style={s.drawerItemText}>Nova conversa</Text>
           </Pressable>
 
-          <Pressable style={s.drawerItem} accessibilityRole="button">
+          <Pressable
+            style={s.drawerItem}
+            accessibilityRole="button"
+            onPress={() => {
+              setBuscaAberta(true);
+              if (!sidebarFixa) setDrawerAberto(false);
+            }}
+          >
             <Ionicons
               name="search-outline"
               size={19}
@@ -1148,7 +1444,16 @@ export default function PetChatScreen() {
             <Text style={s.drawerItemText}>Pesquisar conversas</Text>
           </Pressable>
 
-          <Pressable style={s.drawerItem} accessibilityRole="button">
+          <Pressable
+            style={s.drawerItem}
+            accessibilityRole="button"
+            onPress={() =>
+              showAlert(
+                "Em breve",
+                "A galeria de fotos do pet ainda não está disponível nesta versão do app.",
+              )
+            }
+          >
             <Ionicons
               name="images-outline"
               size={19}
@@ -1158,7 +1463,16 @@ export default function PetChatScreen() {
             <Text style={s.drawerItemText}>Galeria do pet</Text>
           </Pressable>
 
-          <Pressable style={s.drawerItem} accessibilityRole="button">
+          <Pressable
+            style={s.drawerItem}
+            accessibilityRole="button"
+            onPress={() =>
+              showAlert(
+                "Em breve",
+                "A biblioteca médica ainda não está disponível nesta versão do app.",
+              )
+            }
+          >
             <Ionicons
               name="library-outline"
               size={19}
@@ -1203,7 +1517,14 @@ export default function PetChatScreen() {
             );
           })}
 
-          <Pressable style={s.drawerItem} accessibilityRole="button">
+          <Pressable
+            style={s.drawerItem}
+            accessibilityRole="button"
+            onPress={() => {
+              if (!sidebarFixa) setDrawerAberto(false);
+              navigation.navigate("AddPet");
+            }}
+          >
             <Ionicons
               name="add"
               size={20}
@@ -1212,24 +1533,6 @@ export default function PetChatScreen() {
             />
             <Text style={s.drawerItemText}>Adicionar pet</Text>
           </Pressable>
-        </View>
-
-        <View style={s.drawerBloco}>
-          <Text style={s.drawerSectionTitle}>Recentes</Text>
-          {CONVERSAS_RECENTES.map((titulo, i) => (
-            <Pressable
-              key={titulo}
-              style={[s.drawerItem, i === 0 && s.drawerItemAtivo]}
-              accessibilityRole="button"
-            >
-              <Text
-                style={[s.drawerItemText, i === 0 && s.drawerItemTextAtivo]}
-                numberOfLines={1}
-              >
-                {titulo}
-              </Text>
-            </Pressable>
-          ))}
         </View>
       </ScrollView>
 
@@ -1316,6 +1619,7 @@ export default function PetChatScreen() {
 
       <Toque
         style={s.triageLaunch}
+        contentStyle={s.toqueRowConteudo}
         onPress={() => setShowTriage(true)}
         reduceMotion={reduceMotion}
         accessibilityLabel="Iniciar triagem de sintomas"
@@ -1352,6 +1656,7 @@ export default function PetChatScreen() {
               <Entrada key={sug.text} disabled={reduceMotion} delay={i * 70} style={s.suggestionCard}>
                 <Toque
                   style={s.toqueFillRow}
+                  contentStyle={s.toqueRowConteudo}
                   onPress={() => handleSend(sug.text)}
                   reduceMotion={reduceMotion}
                 >
@@ -1501,21 +1806,19 @@ export default function PetChatScreen() {
   ============================================================ */
 
   const cartoesPet: {
-    icon: IconName;
     cor: string;
     valor: string;
     label: string;
     sub: string;
+    onPress?: () => void;
   }[] = [
     {
-      icon: "pulse",
       cor: riskCor,
       valor: risk ? `${risk.riskScore}` : "—",
       label: "Risco atual",
       sub: risk ? `Nível ${risk.riskLabel}` : "Sem avaliação",
     },
     {
-      icon: "medkit",
       cor: c.accentGreen,
       valor: `${petStats.vacinasEmDia}/${petStats.totalVacinas}`,
       label: "Vacinas em dia",
@@ -1525,14 +1828,12 @@ export default function PetChatScreen() {
           : "Nenhuma pendência",
     },
     {
-      icon: "fitness",
       cor: c.accentLight,
       valor: `${petStats.medicacoesAtivas}`,
       label: "Medicações ativas",
       sub: petStats.medicacoesAtivas > 0 ? "Em uso agora" : "Nenhuma em uso",
     },
     {
-      icon: "warning",
       cor: petStats.alertasCriticos > 0 ? c.accentRed : c.accentOrange,
       valor: `${petStats.totalAlertas}`,
       label: "Alertas ativos",
@@ -1540,6 +1841,7 @@ export default function PetChatScreen() {
         petStats.totalAlertas > 0
           ? `${petStats.alertasCriticos} crítico(s), ${petStats.alertasAtencao} atenção`
           : "Tudo tranquilo",
+      onPress: () => setShowAlertsDetail(true),
     },
   ];
 
@@ -1587,20 +1889,48 @@ export default function PetChatScreen() {
       </View>
 
       <View style={s.statsCardsWrap}>
-        {cartoesPet.map((card, i) => (
-          <Entrada key={card.label} disabled={reduceMotion} delay={i * 80}>
+        {cartoesPet.map((card, i) => {
+          const corpo = (
             <View style={s.statCard}>
-              <View style={[s.statCardIcon, { backgroundColor: `${card.cor}22` }]}>
-                <Ionicons name={card.icon} size={16} color={card.cor} />
+              <View style={[s.statCardAccent, { backgroundColor: card.cor }]} />
+              <View style={s.statCardBody}>
+                <View style={s.statCardTopRow}>
+                  <Text style={s.statCardLabel}>{card.label}</Text>
+                  {card.onPress && (
+                    <Ionicons
+                      name="chevron-forward"
+                      size={13}
+                      color={c.textSecondary}
+                    />
+                  )}
+                </View>
+                <Text style={[s.statCardValue, { color: card.cor }]}>
+                  {card.valor}
+                </Text>
+                <Text style={s.statCardSub} numberOfLines={1}>
+                  {card.sub}
+                </Text>
               </View>
-              <Text style={s.statCardValue}>{card.valor}</Text>
-              <Text style={s.statCardLabel}>{card.label}</Text>
-              <Text style={s.statCardSub} numberOfLines={1}>
-                {card.sub}
-              </Text>
             </View>
-          </Entrada>
-        ))}
+          );
+
+          return (
+            <Entrada key={card.label} disabled={reduceMotion} delay={i * 80}>
+              {card.onPress ? (
+                <Toque
+                  style={s.toqueFillColumn}
+                  onPress={card.onPress}
+                  reduceMotion={reduceMotion}
+                  accessibilityLabel={`${card.label}: ${card.valor}`}
+                >
+                  {corpo}
+                </Toque>
+              ) : (
+                corpo
+              )}
+            </Entrada>
+          );
+        })}
       </View>
     </View>
   );
@@ -1827,6 +2157,70 @@ export default function PetChatScreen() {
           </Pressable>
         </View>
 
+        {/* PAINEL: BUSCA NA CONVERSA */}
+        {buscaAberta && (
+          <View style={s.painel}>
+            <View style={s.painelInner}>
+              <View style={s.buscaRow}>
+                <Ionicons name="search" size={17} color={c.textSecondary} />
+                <TextInput
+                  style={s.buscaInput}
+                  placeholder="Pesquisar nesta conversa"
+                  placeholderTextColor={c.textSecondary}
+                  value={termoBusca}
+                  onChangeText={setTermoBusca}
+                  autoFocus
+                  accessibilityLabel="Pesquisar nesta conversa"
+                />
+                {termoBusca.length > 0 && (
+                  <Text style={s.buscaContagem}>
+                    {resultadosBusca.length
+                      ? `${indiceResultado + 1}/${resultadosBusca.length}`
+                      : "0/0"}
+                  </Text>
+                )}
+                <Pressable
+                  style={s.drawerIconBtn}
+                  hitSlop={10}
+                  onPress={() => irParaResultado(indiceResultado - 1)}
+                  disabled={!resultadosBusca.length}
+                  accessibilityRole="button"
+                  accessibilityLabel="Resultado anterior"
+                >
+                  <Ionicons
+                    name="chevron-up"
+                    size={18}
+                    color={resultadosBusca.length ? c.text : c.textLight}
+                  />
+                </Pressable>
+                <Pressable
+                  style={s.drawerIconBtn}
+                  hitSlop={10}
+                  onPress={() => irParaResultado(indiceResultado + 1)}
+                  disabled={!resultadosBusca.length}
+                  accessibilityRole="button"
+                  accessibilityLabel="Próximo resultado"
+                >
+                  <Ionicons
+                    name="chevron-down"
+                    size={18}
+                    color={resultadosBusca.length ? c.text : c.textLight}
+                  />
+                </Pressable>
+                <Pressable
+                  style={s.drawerIconBtn}
+                  hitSlop={10}
+                  onPress={fecharBusca}
+                  accessibilityRole="button"
+                  accessibilityLabel="Fechar busca"
+                >
+                  <Ionicons name="close" size={18} color={c.textSecondary} />
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* PAINEL: NÚMEROS DO PET */}
         {showPetStats && !(r.statsPanelWidth > 0) && (
           <View style={s.painel}>
@@ -1933,10 +2327,11 @@ export default function PetChatScreen() {
                   <Toque
                     key={sintoma.termo}
                     style={s.triageItem}
+                    contentStyle={s.toqueRowConteudo}
                     onPress={() => handleTriage(sintoma.termo)}
                     reduceMotion={reduceMotion}
                   >
-                    <Text style={s.triageEmoji}>{sintoma.emoji}</Text>
+                    <Ionicons name={sintoma.icon} size={20} color={c.accentLight} />
                     <Text style={s.triageItemText}>{sintoma.label}</Text>
                   </Toque>
                 ))}
@@ -2003,6 +2398,7 @@ export default function PetChatScreen() {
             onScroll={aoRolar}
             scrollEventThrottle={16}
             onContentSizeChange={aoMudarTamanho}
+            onScrollToIndexFailed={aoFalharScrollBusca}
             ListHeaderComponent={messages.length === 0 ? boasVindas : null}
             ListFooterComponent={rodapeLista}
             removeClippedSubviews={Platform.OS === "android"}
@@ -2035,93 +2431,131 @@ export default function PetChatScreen() {
         {/* BARRA DE ENTRADA */}
         <View style={s.inputBar}>
           <View style={s.inputBarInner}>
-            <Pressable
-              style={({ pressed }) => [s.plusButton, pressed && s.pressed]}
-              onPress={() => setShowQuickActions((v) => !v)}
-              accessibilityRole="button"
-              accessibilityLabel="Atalhos"
-            >
-              <Ionicons
-                name={showQuickActions ? "close" : "add"}
-                size={22}
-                color={c.accentLight}
-              />
-            </Pressable>
+            {voz.gravando ? (
+              <>
+                <Pressable
+                  style={({ pressed }) => [s.gravacaoCancelar, pressed && s.pressed]}
+                  onPress={handleCancelarGravacao}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancelar gravação"
+                >
+                  <Ionicons name="trash-outline" size={20} color={c.accentRed} />
+                </Pressable>
 
-            <View
-              style={[s.inputContainer, inputFocado && s.inputContainerFocado]}
-            >
-              <TextInput
-                style={[
-                  s.input,
-                  { height: Math.min(Math.max(22, alturaInput), r.sp(96)) },
-                ]}
-                placeholder="Pergunte ao Clyvo"
-                placeholderTextColor={c.textSecondary}
-                value={input}
-                onChangeText={setInput}
-                onContentSizeChange={(e) =>
-                  setAlturaInput(e.nativeEvent.contentSize.height)
-                }
-                multiline
-                maxLength={LIMITE_CARACTERES}
-                blurOnSubmit={false}
-                onFocus={() => setInputFocado(true)}
-                onBlur={() => setInputFocado(false)}
-                accessibilityLabel="Mensagem"
-              />
-
-              {input.length > LIMITE_CARACTERES * 0.8 && (
-                <Text style={s.characterCount}>
-                  {input.length}/{LIMITE_CARACTERES}
-                </Text>
-              )}
-            </View>
-
-            {!podeEnviar && !sending ? (
-              <Pressable
-                style={({ pressed }) => [
-                  s.sendButton,
-                  voz.gravando && s.micButtonGravando,
-                  pressed && s.pressed,
-                ]}
-                onPress={handleMicPress}
-                disabled={voz.transcrevendo}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  voz.gravando ? "Parar gravação e enviar" : "Falar mensagem por voz"
-                }
-                accessibilityState={{ selected: voz.gravando }}
-              >
-                {voz.transcrevendo ? (
-                  <ActivityIndicator size="small" color={c.white} />
-                ) : (
-                  <Ionicons
-                    name={voz.gravando ? "stop" : "mic-outline"}
-                    size={21}
-                    color={c.white}
+                <View style={s.gravacaoInfo}>
+                  <Animated.View
+                    style={[s.gravacaoDot, { opacity: gravacaoPulse }]}
                   />
-                )}
-              </Pressable>
+                  <Text style={s.gravacaoTempo}>
+                    {formatarTempoAudio(voz.duracaoMs / 1000)}
+                  </Text>
+                  <View style={s.gravacaoNivelWrap}>
+                    {NIVEL_MULTIPLICADORES.map((mult, i) => (
+                      <View
+                        key={i}
+                        style={[
+                          s.gravacaoNivelBarra,
+                          { height: 4 + voz.nivel * mult * 16 },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </View>
+
+                <Pressable
+                  style={({ pressed }) => [s.sendButton, pressed && s.pressed]}
+                  onPress={handleMicPress}
+                  disabled={voz.transcrevendo}
+                  accessibilityRole="button"
+                  accessibilityLabel="Parar gravação e enviar"
+                >
+                  {voz.transcrevendo ? (
+                    <ActivityIndicator size="small" color={c.white} />
+                  ) : (
+                    <Ionicons name="checkmark" size={22} color={c.white} />
+                  )}
+                </Pressable>
+              </>
             ) : (
-            <Pressable
-              style={({ pressed }) => [
-                s.sendButton,
-                !podeEnviar && s.sendButtonDisabled,
-                pressed && podeEnviar && s.pressed,
-              ]}
-              onPress={() => handleSend()}
-              disabled={!podeEnviar}
-              accessibilityRole="button"
-              accessibilityLabel="Enviar mensagem"
-              accessibilityState={{ disabled: !podeEnviar }}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color={c.white} />
-              ) : (
-                <Ionicons name="arrow-up" size={21} color={c.white} />
-              )}
-            </Pressable>
+              <>
+                <Pressable
+                  style={({ pressed }) => [s.plusButton, pressed && s.pressed]}
+                  onPress={() => setShowQuickActions((v) => !v)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Atalhos"
+                >
+                  <Ionicons
+                    name={showQuickActions ? "close" : "add"}
+                    size={22}
+                    color={c.accentLight}
+                  />
+                </Pressable>
+
+                <View
+                  style={[s.inputContainer, inputFocado && s.inputContainerFocado]}
+                >
+                  <TextInput
+                    style={[
+                      s.input,
+                      { height: Math.min(Math.max(22, alturaInput), r.sp(96)) },
+                    ]}
+                    placeholder="Pergunte ao Clyvo"
+                    placeholderTextColor={c.textSecondary}
+                    value={input}
+                    onChangeText={setInput}
+                    onContentSizeChange={(e) =>
+                      setAlturaInput(e.nativeEvent.contentSize.height)
+                    }
+                    multiline
+                    maxLength={LIMITE_CARACTERES}
+                    blurOnSubmit={false}
+                    onFocus={() => setInputFocado(true)}
+                    onBlur={() => setInputFocado(false)}
+                    accessibilityLabel="Mensagem"
+                  />
+
+                  {input.length > LIMITE_CARACTERES * 0.8 && (
+                    <Text style={s.characterCount}>
+                      {input.length}/{LIMITE_CARACTERES}
+                    </Text>
+                  )}
+                </View>
+
+                {!podeEnviar && !sending ? (
+                  <Pressable
+                    style={({ pressed }) => [s.sendButton, pressed && s.pressed]}
+                    onPress={handleMicPress}
+                    disabled={voz.transcrevendo}
+                    accessibilityRole="button"
+                    accessibilityLabel="Falar mensagem por voz"
+                  >
+                    {voz.transcrevendo ? (
+                      <ActivityIndicator size="small" color={c.white} />
+                    ) : (
+                      <Ionicons name="mic-outline" size={21} color={c.white} />
+                    )}
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    style={({ pressed }) => [
+                      s.sendButton,
+                      !podeEnviar && s.sendButtonDisabled,
+                      pressed && podeEnviar && s.pressed,
+                    ]}
+                    onPress={() => handleSend()}
+                    disabled={!podeEnviar}
+                    accessibilityRole="button"
+                    accessibilityLabel="Enviar mensagem"
+                    accessibilityState={{ disabled: !podeEnviar }}
+                  >
+                    {sending ? (
+                      <ActivityIndicator size="small" color={c.white} />
+                    ) : (
+                      <Ionicons name="arrow-up" size={21} color={c.white} />
+                    )}
+                  </Pressable>
+                )}
+              </>
             )}
           </View>
         </View>
@@ -2135,6 +2569,74 @@ export default function PetChatScreen() {
           </ScrollView>
         </View>
       )}
+
+      {/* ---------- MODAL: DETALHE DOS ALERTAS ---------- */}
+      <Modal
+        visible={showAlertsDetail}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAlertsDetail(false)}
+      >
+        <Pressable
+          style={s.modalBackdrop}
+          onPress={() => setShowAlertsDetail(false)}
+        >
+          <Pressable style={s.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={s.painelHeader}>
+              <View>
+                <Text style={s.painelTitle}>Alertas ativos</Text>
+                <Text style={s.painelSubtitle}>
+                  {pet ? `Do prontuário do ${pet.name}` : "Do prontuário"}
+                </Text>
+              </View>
+              <Pressable
+                style={s.drawerIconBtn}
+                hitSlop={10}
+                onPress={() => setShowAlertsDetail(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Fechar alertas"
+              >
+                <Ionicons name="close" size={18} color={c.textSecondary} />
+              </Pressable>
+            </View>
+
+            {risk && risk.alerts.length > 0 ? (
+              <ScrollView style={s.modalScroll}>
+                {risk.alerts.map((a) => (
+                  <View
+                    key={a.code + a.title}
+                    style={[
+                      s.alertChip,
+                      { borderLeftColor: alertColor(a.severity) },
+                    ]}
+                  >
+                    <Ionicons
+                      name={alertIcon(a.severity)}
+                      size={16}
+                      color={alertColor(a.severity)}
+                    />
+                    <View style={s.alertChipContent}>
+                      <Text style={s.alertChipTitle}>{a.title}</Text>
+                      <Text style={s.alertChipDetail}>{a.detail}</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={s.modalVazio}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={28}
+                  color={c.accentGreen}
+                />
+                <Text style={s.modalVazioTexto}>
+                  Nenhum alerta ativo no momento.
+                </Text>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* ---------- DRAWER OVERLAY (celular / tablet em pé) ---------- */}
       {!sidebarFixa && drawerAberto && (
@@ -2530,6 +3032,20 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       marginTop: 2,
     },
 
+    buscaRow: { flexDirection: "row", alignItems: "center", gap: sp(6) },
+    buscaInput: {
+      flex: 1,
+      color: c.text,
+      fontSize: fs(14),
+      paddingVertical: sp(6),
+    },
+    buscaContagem: {
+      color: c.textSecondary,
+      fontSize: fs(12),
+      fontWeight: "600",
+      marginRight: 2,
+    },
+
     quickRow: { flexDirection: "row", gap: sp(8) },
     quickCard: {
       flex: 1,
@@ -2581,7 +3097,6 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       borderWidth: 1,
       borderColor: tint(0.12),
     },
-    triageEmoji: { fontSize: fs(20) },
     triageItemText: {
       color: c.text,
       fontSize: fs(13),
@@ -2880,6 +3395,48 @@ const makeStyles = (theme: Theme, r: Metrics) => {
     },
     userText: { color: c.white, fontSize: fs(15), lineHeight: fs(22) },
     aiText: { color: c.text, fontSize: fs(15), lineHeight: fs(23) },
+
+    /* ---------- MENSAGEM DE VOZ ---------- */
+    audioBubble: {
+      flexDirection: "row",
+      alignItems: "center",
+      minWidth: 168,
+      gap: sp(8),
+    },
+    audioBubbleBotao: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: "rgba(255,255,255,0.22)",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    audioBubbleOnda: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 2,
+      height: 20,
+    },
+    audioBubbleBarra: { width: 2.5, borderRadius: 2 },
+    audioBubbleTempo: {
+      color: "rgba(255,255,255,0.85)",
+      fontSize: fs(11),
+      fontWeight: "600",
+      minWidth: 32,
+    },
+    audioTranscricaoToggle: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      marginTop: sp(8),
+    },
+    audioTranscricaoToggleTexto: {
+      color: c.accentLight,
+      fontSize: fs(11),
+      fontWeight: "700",
+    },
+    audioTranscricaoTexto: { marginTop: sp(8) },
     messageActions: {
       flexDirection: "row",
       alignItems: "center",
@@ -3082,6 +3639,55 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       borderWidth: 1,
       borderColor: isDark ? overlay(0.09) : tint(0.13),
     },
+
+    /* ---------- BARRA DE GRAVAÇÃO ---------- */
+    gravacaoCancelar: {
+      width: 46,
+      height: 46,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      marginRight: sp(8),
+      backgroundColor: isDark ? overlay(0.06) : `${c.accentRed}14`,
+      borderWidth: 1,
+      borderColor: isDark ? overlay(0.09) : `${c.accentRed}26`,
+    },
+    gravacaoInfo: {
+      flex: 1,
+      minHeight: 46,
+      borderRadius: 23,
+      backgroundColor: c.card,
+      paddingHorizontal: sp(16),
+      borderWidth: 1,
+      borderColor: isDark ? overlay(0.14) : overlay(0.09),
+      flexDirection: "row",
+      alignItems: "center",
+      gap: sp(9),
+    },
+    gravacaoDot: {
+      width: 9,
+      height: 9,
+      borderRadius: 5,
+      backgroundColor: c.accentRed,
+    },
+    gravacaoTempo: {
+      color: c.text,
+      fontSize: fs(14),
+      fontWeight: "700",
+      fontVariant: ["tabular-nums"],
+      minWidth: 34,
+    },
+    gravacaoNivelWrap: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+    },
+    gravacaoNivelBarra: {
+      width: 3,
+      borderRadius: 2,
+      backgroundColor: c.accentLight,
+    },
     inputContainer: {
       flex: 1,
       minHeight: 46,
@@ -3138,8 +3744,9 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       backgroundColor: c.accentRed,
       shadowColor: c.accentRed,
     },
-    toqueFillRow: { flex: 1, flexDirection: "row", alignItems: "center" },
+    toqueFillRow: { flex: 1 },
     toqueFillColumn: { flex: 1 },
+    toqueRowConteudo: { flex: 1, flexDirection: "row", alignItems: "center" },
 
     /* ---------- PAINEL: NÚMEROS DO PET ---------- */
     statsPanelFixo: {
@@ -3196,36 +3803,75 @@ const makeStyles = (theme: Theme, r: Metrics) => {
     },
     statsCardsWrap: { gap: sp(10) },
     statCard: {
+      flexDirection: "row",
       backgroundColor: c.card,
-      borderRadius: 16,
-      padding: sp(13),
+      borderRadius: 14,
+      overflow: "hidden",
       borderWidth: 1,
       borderColor: isDark ? c.border : overlay(0.05),
     },
-    statCardIcon: {
-      width: 30,
-      height: 30,
-      borderRadius: 10,
-      alignItems: "center",
-      justifyContent: "center",
-      marginBottom: sp(9),
+    statCardAccent: { width: 4 },
+    statCardBody: {
+      flex: 1,
+      paddingVertical: sp(11),
+      paddingHorizontal: sp(13),
     },
-    statCardValue: {
-      color: c.text,
-      fontSize: fs(20),
-      fontWeight: "700",
-      letterSpacing: -0.4,
+    statCardTopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
     },
     statCardLabel: {
-      color: c.text,
-      fontSize: fs(12),
-      fontWeight: "600",
-      marginTop: 2,
+      color: c.textSecondary,
+      fontSize: fs(10),
+      fontWeight: "700",
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      flexShrink: 1,
+    },
+    statCardValue: {
+      fontSize: fs(27),
+      fontWeight: "800",
+      letterSpacing: -0.8,
+      marginTop: sp(3),
     },
     statCardSub: {
       color: c.textSecondary,
       fontSize: fs(11),
-      marginTop: 2,
+      marginTop: 3,
+    },
+
+    /* ---------- MODAL: DETALHE DOS ALERTAS ---------- */
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: sp(20),
+    },
+    modalCard: {
+      width: "100%",
+      maxWidth: 440,
+      maxHeight: "80%",
+      backgroundColor: c.card,
+      borderRadius: 20,
+      padding: sp(16),
+      elevation: 12,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.3,
+      shadowRadius: 20,
+    },
+    modalScroll: { marginTop: sp(4) },
+    modalVazio: {
+      alignItems: "center",
+      paddingVertical: sp(28),
+      gap: 8,
+    },
+    modalVazioTexto: {
+      color: c.textSecondary,
+      fontSize: fs(13),
+      fontWeight: "600",
     },
   });
 };
