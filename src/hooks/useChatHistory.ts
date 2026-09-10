@@ -1,5 +1,4 @@
-import { useCallback, useState } from "react";
-import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useState } from "react";
 
 import { storageService } from "../services/StorageService";
 
@@ -29,18 +28,24 @@ export function useChatHistory() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load]),
-  );
+  // Carrega uma vez, na montagem. NUNCA em foco/re-foco: recarregar a
+  // cada foco (ex.: o navegador pede permissão do microfone e a aba
+  // perde/recupera o foco) sobrescrevia o chat em memória com a última
+  // versão salva em disco, apagando mensagens que ainda não tinham
+  // terminado de persistir.
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const addMessage = useCallback(async (message: ChatMessage) => {
+    let updated: ChatMessage[] = [];
+
     setMessages((current) => {
-      const updated = [...current, message];
-      storageService.saveData(CHAT_KEY, JSON.stringify(updated));
+      updated = [...current, message];
       return updated;
     });
+
+    await storageService.saveData(CHAT_KEY, JSON.stringify(updated));
   }, []);
 
   const clearHistory = useCallback(async () => {
