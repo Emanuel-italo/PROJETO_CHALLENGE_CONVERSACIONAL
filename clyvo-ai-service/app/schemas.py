@@ -92,6 +92,9 @@ class Alert(BaseModel):
     title: str
     detail: str
     dueDate: str | None = None
+    # Quantos pontos esse alerta contribui pro riskScore (ver RISK_WEIGHTS
+    # em rules.py) — permite ao app explicar de onde vem o número.
+    points: int = 0
 
 
 class AlertsResponse(BaseModel):

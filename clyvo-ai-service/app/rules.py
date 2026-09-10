@@ -273,12 +273,12 @@ def evaluate_pet(
             )
         )
 
+    for alert in alerts:
+        alert.points = RISK_WEIGHTS.get(alert.code, 0)
+
     score = min(
         100,
-        sum(
-            RISK_WEIGHTS.get(alert.code, 0)
-            for alert in alerts
-        ),
+        sum(alert.points for alert in alerts),
     )
 
     if score < 30:

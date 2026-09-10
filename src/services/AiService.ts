@@ -18,6 +18,8 @@ export type Alert = {
   title: string;
   detail: string;
   dueDate?: string | null;
+  /** Quantos pontos esse alerta contribui pro riskScore. */
+  points?: number;
 };
 
 export type ChatResult = {

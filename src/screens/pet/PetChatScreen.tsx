@@ -947,6 +947,7 @@ export default function PetChatScreen() {
   const [showTriage, setShowTriage] = useState(false);
   const [showPetStats, setShowPetStats] = useState(false);
   const [showAlertsDetail, setShowAlertsDetail] = useState(false);
+  const [showRiskDetail, setShowRiskDetail] = useState(false);
   const [imagemAmpliada, setImagemAmpliada] = useState<string | null>(null);
   const [buscaAberta, setBuscaAberta] = useState(false);
   const [termoBusca, setTermoBusca] = useState("");
@@ -1932,6 +1933,7 @@ export default function PetChatScreen() {
       valor: risk ? `${risk.riskScore}` : "—",
       label: "Risco atual",
       sub: risk ? `Nível ${risk.riskLabel}` : "Sem avaliação",
+      onPress: () => setShowRiskDetail(true),
     },
     {
       cor: c.accentGreen,
@@ -2791,6 +2793,99 @@ export default function PetChatScreen() {
                 />
                 <Text style={s.modalVazioTexto}>
                   Nenhum alerta ativo no momento.
+                </Text>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ---------- MODAL: DETALHE DO RISCO ---------- */}
+      <Modal
+        visible={showRiskDetail}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRiskDetail(false)}
+      >
+        <Pressable
+          style={s.modalBackdrop}
+          onPress={() => setShowRiskDetail(false)}
+        >
+          <Pressable style={s.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={s.painelHeader}>
+              <View>
+                <Text style={s.painelTitle}>Risco atual</Text>
+                <Text style={s.painelSubtitle}>
+                  {pet ? `Avaliação de ${pet.name}` : "Avaliação"}
+                </Text>
+              </View>
+              <Pressable
+                style={s.drawerIconBtn}
+                hitSlop={10}
+                onPress={() => setShowRiskDetail(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Fechar detalhe do risco"
+              >
+                <Ionicons name="close" size={18} color={c.textSecondary} />
+              </Pressable>
+            </View>
+
+            <View style={s.riskDetailScoreRow}>
+              <Text style={[s.riskDetailScoreNumero, { color: riskCor }]}>
+                {risk?.riskScore ?? 0}
+              </Text>
+              <View style={s.riskDetailScoreInfo}>
+                <Text style={[s.riskDetailScoreLabel, { color: riskCor }]}>
+                  Nível {risk?.riskLabel ?? "—"}
+                </Text>
+                <Text style={s.riskDetailScoreFaixa}>
+                  0-29 baixo · 30-59 médio · 60-100 alto
+                </Text>
+              </View>
+            </View>
+
+            {risk && risk.alerts.length > 0 ? (
+              <>
+                <Text style={s.riskDetailFatoresTitulo}>
+                  De onde vem esse número
+                </Text>
+                <ScrollView style={s.modalScroll}>
+                  {[...risk.alerts]
+                    .sort((a, b) => (b.points ?? 0) - (a.points ?? 0))
+                    .map((a) => (
+                      <View key={a.code + a.title} style={s.riskFatorRow}>
+                        <View
+                          style={[
+                            s.riskFatorPontos,
+                            { backgroundColor: `${alertColor(a.severity)}22` },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              s.riskFatorPontosTexto,
+                              { color: alertColor(a.severity) },
+                            ]}
+                          >
+                            +{a.points ?? 0}
+                          </Text>
+                        </View>
+                        <View style={s.alertChipContent}>
+                          <Text style={s.alertChipTitle}>{a.title}</Text>
+                          <Text style={s.alertChipDetail}>{a.detail}</Text>
+                        </View>
+                      </View>
+                    ))}
+                </ScrollView>
+              </>
+            ) : (
+              <View style={s.modalVazio}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={28}
+                  color={c.accentGreen}
+                />
+                <Text style={s.modalVazioTexto}>
+                  Nenhum fator de risco identificado — por isso o nível está baixo.
                 </Text>
               </View>
             )}
@@ -4109,6 +4204,54 @@ const makeStyles = (theme: Theme, r: Metrics) => {
       shadowRadius: 20,
     },
     modalScroll: { marginTop: sp(4) },
+    riskDetailScoreRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: sp(14),
+      marginBottom: sp(16),
+      paddingBottom: sp(16),
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: isDark ? c.border : overlay(0.08),
+    },
+    riskDetailScoreNumero: {
+      fontSize: fs(40),
+      fontWeight: "800",
+      letterSpacing: -1,
+    },
+    riskDetailScoreInfo: { flex: 1 },
+    riskDetailScoreLabel: {
+      fontSize: fs(15),
+      fontWeight: "700",
+      textTransform: "capitalize",
+    },
+    riskDetailScoreFaixa: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      marginTop: 3,
+    },
+    riskDetailFatoresTitulo: {
+      color: c.textSecondary,
+      fontSize: fs(11),
+      fontWeight: "700",
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
+      marginBottom: sp(8),
+    },
+    riskFatorRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: sp(10),
+      marginBottom: sp(10),
+    },
+    riskFatorPontos: {
+      minWidth: 42,
+      height: 24,
+      borderRadius: 8,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 6,
+    },
+    riskFatorPontosTexto: { fontSize: fs(11), fontWeight: "800" },
     modalVazio: {
       alignItems: "center",
       paddingVertical: sp(28),
