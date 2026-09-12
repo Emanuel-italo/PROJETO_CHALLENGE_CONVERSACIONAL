@@ -10,8 +10,6 @@ from ..schemas import ChatRequest, ChatResponse, SuggestedAction, Urgency
 from ..simulator import TERMOS_EMERGENCIA, _fold, simulate
 
 VISION_TIMEOUT_SECONDS = 45.0
-# O tier gratuito da Groq tem um teto de tokens de saída por minuto bem mais
-# apertado pros modelos de visão — resposta curta deixa mais margem.
 VISION_MAX_TOKENS = 400
 
 logger = logging.getLogger(__name__)

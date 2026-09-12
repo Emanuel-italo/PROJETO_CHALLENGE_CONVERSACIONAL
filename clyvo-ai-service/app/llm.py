@@ -70,17 +70,9 @@ class LLMClient:
             "include_reasoning": False,
         }
 
-        # Modelos com "modo pensamento" (ex.: Qwen na visão) gastam o
-        # orçamento de tokens no raciocínio interno e podem devolver
-        # message.content vazio se max_tokens for baixo. "none" desliga
-        # esse raciocínio e força a resposta final direto no content.
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
 
-        # Alguns modelos (ex.: visão da Groq) rejeitam a própria geração no
-        # modo JSON estrito com "json_validate_failed" mesmo com prompt
-        # pedindo JSON. Nesses casos pedimos texto livre e extraímos o JSON
-        # no cliente (extract_json já sabe lidar com isso).
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
