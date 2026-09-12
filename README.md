@@ -7,7 +7,7 @@ Aplicativo mobile para tutores acompanharem a saúde de seus pets com assistente
 **CLYVO VET** combina um aplicativo React Native/Expo com uma camada de IA poderosa em Python/FastAPI, oferecendo:
 
 - ✅ **Cadastro completo** de pets (perfil, vacinas, medicamentos)
-- ✅ **Chat conversacional** com Claude (Anthropic) para análise de sintomas
+- ✅ **Chat conversacional** 
 - ✅ **Alertas inteligentes** baseados em regras determinísticas
 - ✅ **Análise de imagens** de pets/sintomas via Claude Vision
 - ✅ **Histórico médico** persistido localmente e na nuvem
@@ -507,20 +507,6 @@ pytest tests/test_llm.py # Teste específico
 
 ---
 
-## 🤝 Próximos Passos (Roadmap)
-
-- [ ] Substituir AsyncStorage por integração real com API via TanStack Query
-- [ ] Integração com calendários (Google Calendar, Apple Calendar)
-- [ ] Notificações push (FCM, OneSignal)
-- [ ] Suporte a múltiplos perfis de tutor
-- [ ] Dashboard veterinário (para clínicas)
-- [ ] Exportar relatórios de saúde em PDF
-- [ ] Integração com wearables (colar com sensor)
-- [ ] Modo offline avançado com sync em background
-- [ ] Testes E2E com Detox
-- [ ] PWA Web App (além de mobile)
-
----
 
 ## 🛠️ Troubleshooting
 
