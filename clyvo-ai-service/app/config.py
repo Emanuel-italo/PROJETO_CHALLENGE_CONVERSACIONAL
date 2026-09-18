@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 25.0
     # Visão computacional (foto do pet). Modelos com suporte a imagem na
     # Groq mudam com frequência — confira console.groq.com/docs/vision.
-    vision_model: str = "qwen/qwen3.6-27b"
+    vision_model: str = "qwen/qwen3.8-27b"
     # Whisper (OpenAI) ...: whisper-1
     # Whisper (Groq) .....: whisper-large-v3
     stt_model: str = "whisper-1"
