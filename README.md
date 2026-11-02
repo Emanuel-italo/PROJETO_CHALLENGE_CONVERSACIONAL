@@ -1,530 +1,302 @@
 # CLYVO VET 🐾
 
-Aplicativo mobile para tutores acompanharem a saúde de seus pets com assistente de IA conversacional, alertas inteligentes e jornada de saúde personalizada.
+Aplicativo mobile para tutores acompanharem a saúde de seus pets, com assistente de IA conversacional (texto, voz e foto), alertas inteligentes da jornada de saúde e lembretes automáticos por e-mail.
+
+> **Challenge FIAP – Disruptive Architectures: IoT, IoB & Generative IA – 4º Sprint**
+
+| | |
+|---|---|
+| 🎥 **Vídeo pitch** | _[cole aqui o link do YouTube (não listado)]_ |
+| 🌐 **API publicada** | https://projeto-challenge-conversacional.onrender.com |
+| 📚 **Swagger** | https://projeto-challenge-conversacional.onrender.com/docs |
+| 🧪 **Evidências** | [docs/EVIDENCIAS.md](docs/EVIDENCIAS.md) |
+
+---
 
 ## 📸 Visão Geral
 
-**CLYVO VET** combina um aplicativo React Native/Expo com uma camada de IA poderosa em Python/FastAPI, oferecendo:
-
-- ✅ **Cadastro completo** de pets (perfil, vacinas, medicamentos)
-- ✅ **Chat conversacional** 
-- ✅ **Alertas inteligentes** baseados em regras determinísticas
-- ✅ **Análise de imagens** de pets/sintomas via Claude Vision
-- ✅ **Histórico médico** persistido localmente e na nuvem
-- ✅ **Autenticação Firebase** com suporte a Google Login
-- ✅ **API pública** publicada no Render.com
+- ✅ **Cadastro de pets** com perfil, vacinas, medicamentos e próximo check-up
+- ✅ **Assistente conversacional com IA generativa** (LLM + RAG) que conhece o histórico do pet
+- ✅ **Entrada por voz** (Whisper) e **resposta falada** (ElevenLabs)
+- ✅ **Análise de foto** do pet/sintoma com modelo de visão
+- ✅ **Motor de regras** determinístico que calcula score de risco e gera alertas
+- ✅ **Guardrail de emergência**: relatos graves sempre escalam para "procurar emergência"
+- ✅ **RPA diário** que envia e-mail ao tutor quando há pendências (vacina vencida, check-up atrasado etc.)
+- ✅ **Autenticação Firebase** (e-mail/senha e Google)
+- ✅ **API pública** hospedada no Render
 
 ---
 
 ## 🏗️ Arquitetura
 
 ```
-┌─────────────────────────────────────┐
-│   Frontend: React Native + Expo      │
-│   (TypeScript, AsyncStorage, Auth)   │
-└──────────────┬──────────────────────┘
-               │ REST API
-               ↓
-┌─────────────────────────────────────┐
-│   Backend: FastAPI (Python)          │
-│   🌐 Publicado: https://             │
-│   projeto-challenge-conversacional   │
-│   .onrender.com                      │
-└──────────────┬──────────────────────┘
-               │
-        ┌──────┼──────┐
-        ↓      ↓      ↓
-    ┌────┐ ┌────┐ ┌──────┐
-    │RAG │ │Rules│ │LLM   │
-    │Eng │ │Motor│ │Claude│
-    └────┘ └────┘ └──────┘
-        │
-┌───────┴─────────────────────────────┐
-│   Firebase (Auth + Validação)       │
-│   AsyncStorage (Dados locais)       │
-│   Render Database (Persistência)    │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  App: React Native + Expo (TypeScript)   │
+│  Firebase Auth · AsyncStorage (pets)     │
+└───────────────────┬──────────────────────┘
+                    │ HTTPS / REST (JSON, multipart)
+                    ↓
+┌──────────────────────────────────────────┐
+│  clyvo-ai-service: FastAPI (Python)      │
+│  publicado no Render                     │
+│                                          │
+│  /api/chat ─┬─ Motor de regras (risco)   │
+│             ├─ RAG (base de conhecimento)│
+│             ├─ LLM (Groq, API OpenAI)    │
+│             └─ Guardrail de emergência   │
+│  /api/alerts ── Motor de regras          │
+│  /api/speech ── STT (Whisper) / TTS      │
+│  /api/rpa ───── Agendador + SQLite +     │
+│                 e-mail (Resend/SMTP)     │
+└──────────────────────────────────────────┘
 ```
 
-### Stack Tecnológico
+### Fluxo de uma mensagem no chat
 
-**Frontend:**
-- React Native 0.81 + Expo (cross-platform: iOS, Android, Web)
-- TypeScript com `strict: true`
-- React Navigation (native-stack + bottom-tabs)
-- Firebase Authentication
-- AsyncStorage (persistência local)
-- TanStack Query (pronto para integração com API real)
+1. O app envia a **mensagem do tutor + dados do pet + histórico** (últimas 8 mensagens) para `POST /api/chat`.
+2. O **motor de regras** (`rules.py`) avalia o pet: vacinas vencidas/próximas, medicação ativa, check-up atrasado, idade → gera alertas e um **score de risco (0–100)**.
+3. O **RAG** (`rag.py`) busca os trechos mais relevantes da base de conhecimento veterinária (`app/knowledge/*.md`: vacinação, medicação, preventivo, emergências).
+4. O **prompt** (`prompts.py`) junta contexto do pet + alertas + trechos recuperados + pergunta, e a **LLM** responde em JSON estruturado: `reply`, `urgency`, `suggestedAction`, `reason`.
+5. O **guardrail** verifica termos de emergência (convulsão, dificuldade respiratória etc.) e, se necessário, **eleva a urgência** independentemente da resposta da LLM.
+6. Se a LLM falhar (timeout, limite de uso), o serviço cai para um **modo simulado** baseado em regras + RAG, e a resposta vem com `simulated: true` — o tutor nunca fica sem resposta.
+7. Se houver foto (`imageBase64`), a requisição vai para o **modelo de visão**.
 
-**Backend:**
-- Python 3.11+
-- FastAPI (async, high-performance)
-- Claude LLM (Anthropic API)
-- ChromaDB (RAG - Retrieval-Augmented Generation)
-- FastAPI STT/TTS (OpenAI Whisper, ElevenLabs)
-- Pydantic (validação de schemas)
-- APScheduler (RPA automático)
+### Técnicas de IA aplicadas
 
-**Infra & Deploy:**
-- **Render.com** - Hosting da API Python
-- Firebase Firestore/Auth - Backend complementar
-- Docker - Containerização
+| Técnica | Onde | Detalhe |
+|---|---|---|
+| IA Generativa / LLM | `llm.py`, `routers/chat.py` | Modelo `openai/gpt-oss-20b` via Groq, saída em JSON mode |
+| Prompt engineering | `prompts.py` | System prompt com papel, limites (não prescreve) e formato de saída |
+| RAG com banco vetorial | `rag.py` | Base de conhecimento convertida em **embeddings semânticos** (`gemini-embedding-001`, 768 dimensões, multilíngue) e armazenada no **ChromaDB** (índice HNSW, distância de cosseno). A pergunta do tutor vira embedding e o ChromaDB devolve os trechos mais próximos |
+| Fallback de busca | `rag.py` | Se o Gemini ou o ChromaDB falharem, a busca cai para **TF-IDF + cosseno** em memória, com expansão de termos populares ("xixi" → urinário) |
+| Visão computacional | `routers/chat.py` | Modelo multimodal analisa foto enviada pelo tutor |
+| Speech-to-Text | `stt.py` | Whisper (`whisper-large-v3-turbo`), idioma forçado em `pt` |
+| Text-to-Speech | `tts.py` | ElevenLabs, voz multilíngue |
+| Sistema especialista (regras) | `rules.py` | Score de risco e alertas determinísticos |
+| Guardrail | `routers/chat.py`, `simulator.py` | Escalonamento obrigatório de emergências |
+| RPA | `scheduler.py`, `job.py`, `carteira.py` | Rotina diária 09:00 (America/Sao_Paulo) que avalia pets e envia e-mail |
+
+### Persistência de dados
+
+| Dado | Onde fica |
+|---|---|
+| Conta do usuário | Firebase Authentication |
+| Pets, vacinas, medicamentos | AsyncStorage (no dispositivo) |
+| Histórico do chat | AsyncStorage (no dispositivo) |
+| Pets inscritos nos lembretes + registro de envios do RPA | SQLite no backend (`clyvo_rpa.db`) |
+| Base de conhecimento do RAG | Arquivos Markdown em `app/knowledge/` → embeddings no **ChromaDB** (banco vetorial, pasta `.chroma/`) |
 
 ---
 
-## 🚀 Quick Start
+## 🧰 Tecnologias
+
+**Frontend:** React Native 0.81 · Expo 54 · TypeScript · React Navigation · TanStack Query · Firebase Auth · AsyncStorage · expo-audio / expo-speech / expo-image-picker
+
+**Backend:** Python · FastAPI · Pydantic / pydantic-settings · httpx · Uvicorn · SQLite
+
+**IA:** Groq (API compatível com OpenAI) · Whisper · ElevenLabs · ChromaDB (banco vetorial) · Gemini Embeddings
+
+**Infra:** Render (API) · Firebase (Auth) · GitHub Actions (`cron-github-actions.yml`)
+
+---
+
+## 🚀 Como rodar
 
 ### Pré-requisitos
 
-- **Node.js** 18+ com npm
-- **Python** 3.11+
-- **Git**
-- Conta Firebase (optional, para auth)
-- API key Anthropic (Claude)
+- Node.js 18+ e npm
+- Python 3.11+
+- Chave de API de um provedor compatível com OpenAI (usamos a **Groq**: https://console.groq.com)
+- (Opcional) chave ElevenLabs para voz e chave Resend/SMTP para e-mails
 
-### 1️⃣ Clonar e Instalar Frontend
+### 1. Frontend
 
 ```bash
 git clone https://github.com/Emanuel-italo/PROJETO_CHALLENGE_CONVERSACIONAL.git
 cd PROJETO_CHALLENGE_CONVERSACIONAL
-
-# Instalar dependências
 npm install
 
-# Verificar tipos TypeScript
-npx tsc --noEmit
+npm start         # abre o Expo (QR code para o Expo Go)
+npm run android   # Android
+npm run ios       # iOS
+npm run web       # navegador
 ```
 
-### 2️⃣ Rodar Frontend Localmente
+> Não existe `npm run dev` — o projeto usa os scripts do Expo acima.
 
-```bash
-# Iniciar Expo
-npm start
+O app já aponta para a API publicada (`src/services/AiService.ts` → `BASE_URL`).
 
-# Abrir em Android
-npm run android
-
-# Abrir em iOS
-npm run ios
-
-# Abrir em Web
-npm run web
-```
-
-O app estará em `http://localhost:19000` (Expo DevTools).
-
-### 3️⃣ Backend - Instalar Dependências Python
+### 2. Backend (opcional — a API já está publicada)
 
 ```bash
 cd clyvo-ai-service
-
-# Criar ambiente virtual (recomendado)
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# ou
-venv\Scripts\activate     # Windows
-
-# Instalar dependências
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # Linux/Mac
 pip install -r Requirements.txt
 ```
 
-### 4️⃣ Configurar Variáveis de Ambiente
-
-Criar arquivo `.env` na raiz do `clyvo-ai-service`:
+Crie `clyvo-ai-service/.env`:
 
 ```env
-# Anthropic
-ANTHROPIC_API_KEY=sk-your-api-key-here
+# LLM (qualquer provedor compatível com OpenAI)
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_API_KEY=gsk_sua_chave
+LLM_MODEL=openai/gpt-oss-20b
+VISION_MODEL=qwen/qwen3.8-27b
 
-# OpenAI (STT)
-OPENAI_API_KEY=sk-your-key-here
+# Voz → texto (usa a mesma chave/URL da LLM)
+STT_MODEL=whisper-large-v3-turbo
+STT_LANGUAGE=pt
 
-# ElevenLabs (TTS)
-ELEVENLABS_API_KEY=your-key-here
-ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM  # Rachel (exemplo)
+# Texto → voz
+ELEVENLABS_API_KEY=sua_chave
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
 
-# Firebase
-FIREBASE_API_KEY=your-key
-FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
-FIREBASE_PROJECT_ID=your-project-id
+# RAG: chroma (banco vetorial) ou simple (TF-IDF em memória)
+RAG_BACKEND=chroma
+# Embeddings multilíngues — chave gratuita em https://aistudio.google.com/apikey
+GEMINI_API_KEY=sua_chave
 
-# Email (RPA)
-SMTP_SERVER=smtp.gmail.com
+# RPA / e-mail: console (só loga), smtp ou resend
+EMAIL_PROVIDER=console
+RESEND_API_KEY=
+SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=seu-email@gmail.com
-SMTP_PASSWORD=seu-app-password
+SMTP_USER=
+SMTP_PASSWORD=
+RPA_TOKEN=clyvo-rpa
 
-# App
-APP_NAME=CLYVO VET
-APP_VERSION=1.0.0
-CORS_ORIGINS=http://localhost:3000,http://localhost:19000,https://seu-dominio.com
+CORS_ORIGINS=*
 ```
 
-### 5️⃣ Rodar Backend Localmente
+Sem `LLM_API_KEY` o serviço sobe em **modo simulado** (regras + RAG), útil para testes.
+
+Rodar (de dentro de `clyvo-ai-service`):
 
 ```bash
-cd clyvo-ai-service/app
-
-# Usando Uvicorn
-uvicorn main:app --reload --port 8000
-
-# Ou usando Python direto
-python -m uvicorn main:app --reload
+uvicorn app.main:app --reload --port 8000
 ```
 
-Backend estará em `http://localhost:8000`
-
-**Endpoints disponíveis:**
-- `GET /health` - Status do serviço
-- `POST /api/chat` - Chat com IA
-- `POST /api/alerts` - Avaliação de riscos
-- `POST /api/alerts/batch` - Avaliação em lote
-- `POST /api/speech/transcribe` - STT (voz → texto)
-- `GET /api/speech/synthesize` - TTS (texto → voz)
-
-Docs interativa: `http://localhost:8000/docs`
+Swagger: http://localhost:8000/docs
 
 ---
 
-## 📊 Estrutura de Arquivos
+## 🔌 Endpoints
 
-```
-PROJETO_CHALLENGE_CONVERSACIONAL/
-├── src/
-│   ├── components/          # UI reutilizáveis
-│   ├── screens/             # Telas por domínio (auth/, pet/, health/, etc)
-│   ├── hooks/               # Lógica de dados (usePets, useVaccines, etc)
-│   ├── services/            # Integração Firebase, AsyncStorage, IA
-│   ├── interfaces/          # Contratos (IPetService)
-│   ├── types/               # TypeScript types
-│   ├── contexts/            # AuthContext
-│   ├── navigation/          # React Navigation
-│   ├── utils/               # Validadores, formatadores, alertas
-│   └── styles/              # StyleSheets por tela
-├── clyvo-ai-service/
-│   ├── app/
-│   │   ├── main.py          # FastAPI app + endpoints
-│   │   ├── config.py        # Configurações (env vars)
-│   │   ├── llm.py           # Cliente Claude
-│   │   ├── rag.py           # RAG Engine + embeddings
-│   │   ├── rules.py         # Rules Motor (alertas)
-│   │   ├── routers/         # Rotas FastAPI (chat, alerts, speech)
-│   │   ├── prompts.py       # Prompts para Claude
-│   │   ├── stt.py           # Speech-to-text
-│   │   ├── tts.py           # Text-to-speech
-│   │   ├── scheduler.py     # APScheduler para RPA
-│   │   ├── job.py           # Jobs automáticos (email alerts)
-│   │   ├── templates.py     # Templates de email
-│   │   ├── knowledge/       # Base de conhecimento (docs)
-│   │   └── tests/           # Testes unitários
-│   ├── Dockerfile           # Docker image
-│   └── Requirements.txt      # Dependências Python
-├── App.tsx                  # Root component
-├── index.ts                 # Entry point
-├── package.json             # Frontend deps
-└── README.md                # Este arquivo
-```
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/health` | Status e configuração ativa (LLM, RAG, voz, RPA) |
+| POST | `/api/chat` | Assistente conversacional (texto e/ou foto) |
+| POST | `/api/alerts` | Score de risco e alertas de um pet |
+| POST | `/api/alerts/batch` | Avaliação de vários pets, ordenada por risco |
+| POST | `/api/speech/transcribe` | Áudio → texto (multipart, campo `file`) |
+| GET | `/api/speech/synthesize?text=...` | Texto → áudio MP3 |
+| GET | `/api/rpa/status` | Agendamento e pets monitorados |
+| POST | `/api/rpa/run` | Dispara a rotina de e-mails (header `X-RPA-Token`) |
+| GET | `/api/rpa/preview?petId=...` | Pré-visualiza o e-mail em HTML |
+| POST | `/api/rpa/pets` | Inscreve um pet nos lembretes |
 
----
+### Exemplo — `POST /api/chat`
 
-## 🔌 API REST - Especificação
-
-### Autenticação
-
-Todas as requisições devem incluir:
-```http
-Content-Type: application/json
-Accept: application/json
-```
-
-Usuário é extraído do contexto (Firebase token no app).
-
-### Endpoints
-
-#### 1. Chat com IA
-```http
-POST /api/chat
-Content-Type: application/json
-
+```json
 {
   "pet": {
-    "id": "pet-123",
-    "name": "Rex",
-    "species": "cachorro",
-    "breed": "Labrador",
-    "age": "3 anos",
-    "weight": "30kg",
-    "vaccines": [...],
-    "medications": [...]
+    "id": "p1", "name": "Nina", "species": "Cachorro", "breed": "Golden Retriever",
+    "age": "9 anos", "weight": "30kg", "ownerId": "u1",
+    "vaccines": [{ "id": "v1", "name": "Antirrábica", "date": "2025-01-10", "nextDue": "2026-01-10", "done": true }],
+    "medications": []
   },
-  "message": "Meu pet está vomitando. O que fazer?",
-  "history": [
-    {"role": "user", "message": "..."},
-    {"role": "assistant", "message": "..."}
-  ],
-  "imageBase64": "data:image/jpeg;base64,..." // opcional
+  "message": "quando vence a vacina da Nina?",
+  "history": []
 }
+```
 
-Response (200 OK):
+Resposta real da API publicada:
+
+```json
 {
-  "reply": "Vômitos podem ter várias causas...",
-  "urgency": "media",
-  "suggestedAction": "agendar_consulta",
-  "reason": "Vômitos contínuos indicam...",
-  "sources": ["knowledge_chunk_1", "knowledge_chunk_2"],
-  "alerts": [
-    {
-      "code": "VOMITING_DETECTED",
-      "severity": "atencao",
-      "title": "Vômitos detectados",
-      "detail": "Seu pet apresentou vômitos...",
-      "points": 15
-    }
-  ],
+  "reply": "A vacina antirrábica da Nina venceu em 10 de janeiro de 2026. É importante agendar uma consulta para atualizar a vacinação.",
+  "urgency": "alta",
+  "suggestedAction": "atualizar_vacina",
+  "reason": "vacina antirrábica vencida, requer reforço",
+  "sources": ["..."],
+  "alerts": [{ "code": "VACINA_VENCIDA", "severity": "critico", "...": "..." }],
   "simulated": false
 }
 ```
 
-**Urgências:** `baixa`, `media`, `alta`, `emergencia`  
+**Urgências:** `baixa`, `media`, `alta`, `emergencia`
 **Ações:** `nenhuma`, `cuidado_em_casa`, `agendar_consulta`, `atualizar_vacina`, `procurar_emergencia`
-
-#### 2. Avaliação de Risco (Único Pet)
-```http
-POST /api/alerts
-Content-Type: application/json
-
-{
-  "id": "pet-123",
-  "name": "Rex",
-  "species": "cachorro",
-  "vaccines": [...],
-  "medications": [...]
-}
-
-Response (200 OK):
-{
-  "petId": "pet-123",
-  "petName": "Rex",
-  "riskScore": 42,
-  "riskLabel": "medio",
-  "alerts": [
-    {
-      "code": "VAC_RAIVA_OVERDUE",
-      "severity": "critico",
-      "title": "Vacina antirrábica vencida",
-      "detail": "Venceu há 2 meses",
-      "dueDate": "2024-07-01",
-      "points": 25
-    }
-  ]
-}
-```
-
-#### 3. Avaliação em Lote
-```http
-POST /api/alerts/batch
-Content-Type: application/json
-
-[
-  { "id": "pet-1", "name": "Rex", ... },
-  { "id": "pet-2", "name": "Luna", ... }
-]
-
-Response (200 OK):
-[
-  { "petId": "pet-1", "riskScore": 42, ... },
-  { "petId": "pet-2", "riskScore": 18, ... }
-]
-```
-
-#### 4. Speech-to-Text
-```http
-POST /api/speech/transcribe
-Content-Type: multipart/form-data
-
-file: <binary audio file>
-
-Response (200 OK):
-{
-  "text": "Meu pet está vomitando"
-}
-```
-
-Formatos suportados: `wav`, `webm`, `m4a`, `mp4`, `ogg`, `3gp`
-
-#### 5. Text-to-Speech
-```http
-GET /api/speech/synthesize?text=Seu%20pet%20precisa%20de%20uma%20consulta
-
-Response (200 OK):
-<audio/mpeg binary>
-```
-
-#### 6. Health Check
-```http
-GET /health
-
-Response (200 OK):
-{
-  "status": "ok",
-  "version": "1.0.0",
-  "llm": {
-    "enabled": true,
-    "model": "claude-opus",
-    "mode": "live"
-  },
-  "rag": {
-    "backend": "chroma",
-    "chunks": 1024
-  },
-  "stt": { "enabled": true, "model": "whisper-1" },
-  "tts": { "enabled": true, "voiceId": "21m00Tcm4TlvDq8ikWAM" },
-  "rpa": {
-    "enabled": true,
-    "schedule": "09:00",
-    "timezone": "America/Sao_Paulo"
-  }
-}
-```
-
----
-
-## 🌐 Deployment no Render
-
-### ✨ Status Atual
-
-**A API do backend está publicada no Render!**
-
-```
-🔗 Endpoint: https://projeto-challenge-conversacional.onrender.com
-📚 Docs: https://projeto-challenge-conversacional.onrender.com/docs
-🏥 Health: https://projeto-challenge-conversacional.onrender.com/health
-```
-
-### Como foi feito
-
-1. **Dockerfile** criado (`clyvo-ai-service/Dockerfile`)
-   ```dockerfile
-   FROM python:3.11-slim
-   WORKDIR /app
-   COPY Requirements.txt .
-   RUN pip install --no-cache-dir -r Requirements.txt
-   COPY app/ .
-   CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-   ```
-
-2. **Variáveis de Ambiente** configuradas no Render:
-   - `ANTHROPIC_API_KEY`
-   - `OPENAI_API_KEY`
-   - `ELEVENLABS_API_KEY`
-   - `ELEVENLABS_VOICE_ID`
-   - `CORS_ORIGINS`
-   - E todas as outras do `.env`
-
-3. **Build & Deploy**:
-   - Render monitora o repositório GitHub
-   - Detecta mudanças no branch `main`
-   - Rebuilda a Docker image
-   - Reinicia o serviço automaticamente
-   - Logs disponíveis no dashboard Render
-
-### Conectar Frontend ao Backend Publicado
-
-No arquivo `src/services/AiService.ts`, o `BASE_URL` já aponta para Render:
-
-```typescript
-const BASE_URL = "https://projeto-challenge-conversacional.onrender.com";
-```
-
-Quando o app for buildado para produção, ele automaticamente chamará a API pública.
-
-### Monitorar Deployment
-
-- **Render Dashboard**: https://dashboard.render.com
-- **Logs em tempo real** da API
-- **Métricas** de CPU, memória, requests
-- **Alertas** para falhas ou timeouts
 
 ---
 
 ## 🧪 Testes
 
-### Frontend (TypeScript)
-```bash
-npx tsc --noEmit         # Verificar tipos
-npm test                 # Rodar testes (se configurado)
-```
-
-### Backend (Python)
 ```bash
 cd clyvo-ai-service
-pytest tests/            # Rodar suite de testes
-pytest tests/test_llm.py # Teste específico
+python -m pytest app/tests -v
+```
+
+| Arquivo | O que valida |
+|---|---|
+| `test_rules.py` | Motor de regras: vacina vencida/em dia, pet idoso, check-up atrasado, medicação, datas em formato BR |
+| `test_api.py` | Endpoints: health, chat com contexto do pet, guardrail de emergência, recusa de prescrição, alertas e lote |
+| `test_rpa.py` | RPA: carteira, envio, trava diária, endpoint protegido por token, preview e inscrição |
+
+**Resultado atual: 23 testes passando.** Detalhes e respostas reais da API em [docs/EVIDENCIAS.md](docs/EVIDENCIAS.md).
+
+---
+
+## 📊 Estrutura
+
+```
+PROJETO_CHALLENGE_CONVERSACIONAL/
+├── App.tsx / index.ts          # entrada do app
+├── src/
+│   ├── screens/                # auth, dashboard, pet (inclui PetChatScreen), health, profile
+│   ├── components/             # cards, header, menu, inputs
+│   ├── hooks/                  # useAiChat, useVoiceRecorder, usePetRisk, usePets...
+│   ├── services/               # AiService (API), AuthService/firebase, PetService, StorageService
+│   ├── contexts/ navigation/ interfaces/ ...
+├── clyvo-ai-service/
+│   ├── app/
+│   │   ├── main.py             # FastAPI + /health
+│   │   ├── config.py           # variáveis de ambiente
+│   │   ├── llm.py              # cliente LLM (API compatível com OpenAI)
+│   │   ├── prompts.py          # system prompt e montagem de contexto
+│   │   ├── rag.py              # RAG (TF-IDF / ChromaDB)
+│   │   ├── rules.py            # motor de regras e score de risco
+│   │   ├── simulator.py        # modo simulado / termos de emergência
+│   │   ├── stt.py / tts.py     # voz
+│   │   ├── scheduler.py / job.py / carteira.py / mailer.py / templates.py  # RPA
+│   │   ├── routers/            # chat, alerts, speech, rpa
+│   │   ├── knowledge/          # base de conhecimento do RAG
+│   │   └── tests/              # testes automatizados
+│   └── Requirements.txt
+└── docs/EVIDENCIAS.md          # resultados dos testes e da API
 ```
 
 ---
 
-## 📱 Funcionalidades Principais
+## 📈 Resultados
 
-### 🐕 Pets (CRUD Completo)
-- **Create**: Adicionar novo pet com foto e detalhes
-- **Read**: Listar pets, visualizar detalhes
-- **Update**: Editar perfil do pet
-- **Delete**: Remover pet
+- Integração completa **app → API → regras + RAG + LLM → app**, funcionando na API publicada.
+- A IA **personaliza** a resposta com os dados do pet (nome, idade, vacinas, medicação) e indica **urgência e próxima ação**, apoiando o acompanhamento contínuo da saúde.
+- **Segurança**: o guardrail força "procurar emergência" em relatos graves, e o assistente não prescreve medicamentos.
+- **Resiliência**: em falha da LLM, o modo simulado mantém o atendimento.
+- **Para a clínica**: o RPA lembra o tutor de vacinas e check-ups, trazendo-o de volta à clínica.
 
-### 💉 Saúde (Vacinas, Medicamentos, Checkups)
-- **Vacinação**: Registrar vacinas, marcar como feito, alertas de vencimento
-- **Medicamentos**: Dosagem, frequência, duração
-- **Calendário**: Visualizar agenda de saúde mensal
-- **Pendências**: Lista centralizada de ações pendentes
+### Limitações e próximos passos
 
-### 💬 Chat com IA
-- **Assistente conversacional** 24/7
-- **Análise de sintomas** via mensagem ou imagem
-- **Sugestões de ações** (cuidado em casa, agendar, emergência)
-- **Histórico** persistido localmente
-
-### 🚨 Alertas Inteligentes
-- **Vacinação**: Vencidas, próximas, faltando
-- **Medicamentos**: Terminando, período de ação
-- **Checkups**: Atrasados, próximos
-- **Saúde**: Comportamento, apetite, energia
-
-### 🔐 Autenticação (Firebase)
-- Cadastro com email
-- Login com email/senha
-- Login com Google
-- Verificação de email obrigatória
-- Redefinição de senha
+- Dados dos pets ficam no dispositivo (AsyncStorage); próximo passo é sincronizar em banco na nuvem (ex.: Firestore).
+- Ampliar a base de conhecimento veterinária e dividi-la em mais seções para buscas mais precisas.
 
 ---
-
-## 📚 Documentação Adicional
-
-- **[DADOS_ESPECIFICACAO.md](./DADOS_ESPECIFICACAO.md)** - Estrutura completa de dados, fluxos, e conformidade
-- **Diagramas de arquitetura** - Inclusos no relatório
-- **API Docs** - Swagger em `/docs` quando backend está rodando
-
----
-
 
 ## 🛠️ Troubleshooting
 
-### Erro: "API call failed"
-- Verifique se `ANTHROPIC_API_KEY` está configurada
-- Teste `/health` do backend: `curl https://projeto-challenge-conversacional.onrender.com/health`
-- Verifique CORS: endpoint deve estar em `CORS_ORIGINS`
-
-### Erro: "Firebase not initialized"
-- Adicione credenciais Firebase no `src/services/firebase.ts`
-- Verifique se `firebaseConfig` tem as chaves corretas
-
-### Erro: "AsyncStorage not found"
-- No web, AsyncStorage tem fallback para localStorage
-- Em React Native, ensure está instalado: `npm install @react-native-async-storage/async-storage`
-
-### Backend demora para responder
-- Primeiro request pode levar ~30s (Render cold start)
-- Requisições posteriores são rápidas
-- Use `/health` para warm up
-
+- **`npm run dev` não funciona** → use `npm start` (Expo).
+- **Primeira resposta demora ~30s** → cold start do Render; chame `/health` antes para "acordar" a API.
+- **Resposta com `simulated: true`** → a LLM falhou ou atingiu limite de uso; o campo `llmError` traz o motivo.
+- **Erro de import ao rodar o backend** → rode `uvicorn app.main:app` de dentro de `clyvo-ai-service` (não de dentro de `app/`).

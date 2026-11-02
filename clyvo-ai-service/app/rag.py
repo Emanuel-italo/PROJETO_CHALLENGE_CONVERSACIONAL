@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import math
 import re
 import unicodedata
@@ -6,6 +7,8 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 STOPWORDS = {
     "a", "as", "o", "os", "de", "da", "do", "das", "dos", "e", "em", "no", "na",
@@ -100,33 +103,81 @@ class SimpleRetriever:
         return scored[:k]
 
 
+class GeminiEmbedder:
+    """Gera embeddings multilíngues pela API do Gemini (entende português)."""
+
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
+
+    def embed(self, texts: list[str], task_type: str) -> list[list[float]]:
+        import httpx
+
+        model = settings.gemini_embedding_model
+        body = {
+            "requests": [
+                {
+                    "model": f"models/{model}",
+                    "content": {"parts": [{"text": text}]},
+                    "taskType": task_type,
+                    "outputDimensionality": settings.gemini_embedding_dim,
+                }
+                for text in texts
+            ]
+        }
+        resposta = httpx.post(
+            self.URL.format(model=model),
+            headers={"x-goog-api-key": settings.gemini_api_key},
+            json=body,
+            timeout=settings.gemini_timeout_seconds,
+        )
+        resposta.raise_for_status()
+        return [e["values"] for e in resposta.json()["embeddings"]]
+
+
 class ChromaRetriever:
 
 
     def __init__(self, chunks: list[Chunk]) -> None:
-        import chromadb  
+        import chromadb
 
         self.chunks = {c.id: c for c in chunks}
+        self.embedder = GeminiEmbedder() if settings.gemini_api_key.strip() else None
+        self.collection_name = (
+            f"clyvo_vet_kb_{settings.gemini_embedding_model}".replace(".", "_")
+            if self.embedder
+            else "clyvo_vet_kb"
+        )
         self.client = chromadb.PersistentClient(path=settings.chroma_dir)
         self.collection = self._get_collection()
 
         if self.collection.count() != len(chunks):
             if self.collection.count():
-                self.client.delete_collection("clyvo_vet_kb")
+                self.client.delete_collection(self.collection_name)
                 self.collection = self._get_collection()
             self.collection.add(
                 ids=[c.id for c in chunks],
                 documents=[c.text for c in chunks],
                 metadatas=[{"source": c.source, "title": c.title} for c in chunks],
+                embeddings=(
+                    self.embedder.embed([c.text for c in chunks], "RETRIEVAL_DOCUMENT")
+                    if self.embedder
+                    else None
+                ),
             )
 
     def _get_collection(self):
+        extra = {"embedding_function": None} if self.embedder else {}
         return self.client.get_or_create_collection(
-            name="clyvo_vet_kb", metadata={"hnsw:space": "cosine"}
+            name=self.collection_name, metadata={"hnsw:space": "cosine"}, **extra
         )
 
     def search(self, query: str, k: int) -> list[tuple[Chunk, float]]:
-        result = self.collection.query(query_texts=[query], n_results=k)
+        if self.embedder:
+            result = self.collection.query(
+                query_embeddings=self.embedder.embed([query], "RETRIEVAL_QUERY"),
+                n_results=k,
+            )
+        else:
+            result = self.collection.query(query_texts=[query], n_results=k)
         saida: list[tuple[Chunk, float]] = []
         for cid, dist in zip(result["ids"][0], result["distances"][0]):
             chunk = self.chunks.get(cid)
@@ -145,12 +196,25 @@ class KnowledgeBase:
                 if self.backend_name == "chroma"
                 else SimpleRetriever(self.chunks)
             )
-        except Exception: 
+        except Exception:
+            logger.exception("Falha ao iniciar o backend %s do RAG", self.backend_name)
             self.backend_name = "simple (fallback)"
             self.retriever = SimpleRetriever(self.chunks)
+        self.fallback = (
+            self.retriever
+            if isinstance(self.retriever, SimpleRetriever)
+            else SimpleRetriever(self.chunks)
+        )
+        if self.backend_name == "chroma" and getattr(self.retriever, "embedder", None):
+            self.backend_name = f"chroma + {settings.gemini_embedding_model}"
 
     def search(self, query: str, k: int | None = None) -> list[tuple[Chunk, float]]:
-        return self.retriever.search(query, k or settings.rag_top_k)
+        k = k or settings.rag_top_k
+        try:
+            return self.retriever.search(query, k)
+        except Exception:
+            logger.exception("Falha na busca vetorial, usando TF-IDF")
+            return self.fallback.search(query, k)
 
 
 knowledge_base = KnowledgeBase()

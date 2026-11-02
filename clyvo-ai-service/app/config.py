@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     rag_backend: str = "simple"
     rag_top_k: int = 3
     chroma_dir: str = "./.chroma"
+    # Embeddings multilíngues (Gemini) para o ChromaDB.
+    # Chave gratuita: https://aistudio.google.com/apikey
+    gemini_api_key: str = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dim: int = 768
+    gemini_timeout_seconds: float = 20.0
     rpa_enabled: bool = True
     rpa_hour: int = 9            
     rpa_minute: int = 0

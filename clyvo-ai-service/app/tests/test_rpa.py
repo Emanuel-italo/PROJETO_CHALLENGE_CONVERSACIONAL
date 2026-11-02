@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.main import app
-from app.rpa import carteira, job
+from app import carteira, job
 
 HOJE = date(2026, 9, 6)
 TOKEN = {"X-RPA-Token": settings.rpa_token}

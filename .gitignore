@@ -30,6 +30,10 @@ yarn-error.*
 .DS_Store
 *.pem
 
+# ChromaDB / SQLite locais do backend
+.chroma/
+clyvo_rpa.db
+
 # local env files
 .env
 .env*.local
